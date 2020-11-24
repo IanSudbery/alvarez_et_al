@@ -704,7 +704,6 @@ def filterShiftTagAlign(infile, outfile):
                                                                     excluded_beds, 
                                                                     temp_file)
     
-    statement += ''' checkpoint;
-                    mv %(temp_file)s %(outfile)s'''
+    statement += '''mv %(temp_file)s %(outfile)s'''
 
     P.run(statement)
