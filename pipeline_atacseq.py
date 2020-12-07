@@ -1,4 +1,4 @@
-from ruffus import follows, transform, add_inputs, mkdir, regex, formatter
+from ruffus import follows, transform, add_inputs, mkdir, regex, formatter, merge, subdivide
 #from ruffus.combinatorics import *
 
 import sys
@@ -10,8 +10,7 @@ import pipelineAtacseq
 import tempfile
 import re
 import cgatcore.iotools as IOTools
-#sys.path.insert(0, "/home/mbp15ja/dev/pipeline_chromHMM/src/")
-#import PipelineChromHMM
+import pandas
 #sys.path.insert(0, "/home/mbp15ja/dev/AuxiliaryPrograms/Segmentations/")
 #import compareSegmentations as compseg
 #sys.path.insert(0, "/home/mbp15ja/dev/AuxiliaryPrograms/logParsers/")
@@ -31,9 +30,9 @@ import matplotlib.pyplot as plt
 import math
 
 PARAMS = P.get_parameters(
-    ["%s/pipeline.ini" % os.path.splitext(__file__)[0],
+    ["%s/pipeline.yml" % os.path.splitext(__file__)[0],
      "../pipeline.ini",
-     "pipeline.ini"])
+     "pipeline.yml"])
 
 
 #------------------------------------------------------------------------------
@@ -73,8 +72,7 @@ def getInitialMappingStats(infile, outfile):
     # Get the stats
     pipelineAtacseq.getMappedUnmappedReads(temp_file, 
                        outfile, 
-                       submit=True,
-                       job_memory="6G")
+                       submit=True)
     
     # Remove the temporal file
     statement = '''rm %(temp_file)s; 
@@ -113,13 +111,14 @@ def filterOutIncorrectPairsAndExcessiveMultimappers(infile, outfile):
     # Samtools creates temporary files with a certain prefix
     samtools_temp_file = (tempfile.NamedTemporaryFile(dir=tmp_dir, delete=False)).name
     
+    scripts_dir = os.path.join(os.path.dirname(__file__), "scripts")
 
 
     statement = '''samtools view -F 524 -f 2 -u %(infile)s | 
                    samtools sort -n - -o %(first_filtering_bam_output)s 
                                   -T %(samtools_temp_file)s 2> %(log_file)s &&
                    samtools view -h %(first_filtering_bam_output)s | 
-                    scripts/assign_multimappers.py -k %(allowed_multimappers)s --paired-end | 
+                %(scripts_dir)s/assign_multimappers.py -k %(allowed_multimappers)s --paired-end | 
     samtools view -bS - -o %(temp_file)s 2>> %(log_file)s &&    
     mv %(temp_file)s %(outfile)s &&    
     rm %(first_filtering_bam_output)s
@@ -192,7 +191,7 @@ def filterOutOrphanReadsAndDifferentChrPairs(infile, outfile):
     sample_details = PARAMS["samples_details_table"]
     
     # Get trimmings in the 5' ends done previously (for example in qc).
-    five_prime_trim = pipelineAtacseq.getSampleQCShift(sample_name, sample_details)
+    five_prime_trim = 0 # pipelineAtacseq.getSampleQCShift(sample_name, sample_details)
     
     integer_five_prime_correction = 0
     
@@ -405,7 +404,7 @@ def getPostDuplicationStats(infile, outfile):
 
 
 #------------------------------------------------------------------------------
-@transform(markDuplicates,
+@subdivide(markDuplicates,
            regex("(.+)/(.+).bam"),
            [(r"\1/\2_pos_sorted.bam"), 
             (r"\1/\2_read_name_sorted.bam")],
@@ -528,7 +527,7 @@ def calculateLibrarycomplexity(infile, outfile):
 
 #------------------------------------------------------------------------------
 @follows(mkdir("flagstats.dir"), deduplicate)
-@transform("dedupped.dir/*_pos_sorted.bam",
+@transform(deduplicate,
            formatter(".+/(?P<SAMPLE>.+)_pos_sorted\.bam"),
            "flagstats.dir/{SAMPLE[0]}.flagstats")
 def index(infile, outfile):    
@@ -553,7 +552,7 @@ def index(infile, outfile):
     
 #------------------------------------------------------------------------------   
 @follows(mkdir("tag_align.dir"), index, deduplicate)
-@transform("dedupped.dir/*_pos_sorted.bam",
+@transform(deduplicate,
            formatter(".+/(?P<SAMPLE>.+)_pos_sorted\.bam"),
            "tag_align.dir/{SAMPLE[0]}.PE2SE.tagAlign.gz")
 def createTagAlign(infile, outfile):
@@ -568,9 +567,8 @@ def createTagAlign(infile, outfile):
     # Create virtual SE file containing both read pairs
     statement = '''bedtools bamtobed -i %(infile)s | 
     awk 'BEGIN{OFS="\\t"}{$4="N";$5="1000";print $0}' | 
-    gzip -c > %(temp_file)s 2> %(log_file)s;
-    checkpoint;
-    
+    gzip -c > %(temp_file)s 2> %(log_file)s &&
+        
     mv %(temp_file)s %(outfile)s;
     '''
     
@@ -595,7 +593,7 @@ def excludeUnwantedContigsPE2SE(infile, outfile):
                                                                    excluded_chrs,
                                                                    temp_file)
     
-    statement += '''
+    statement += '''&&
                     mv %(temp_file)s %(outfile)s'''
     
     P.run(statement)
@@ -616,7 +614,7 @@ def shiftTagAlign(infile, outfile):
     sample_details = PARAMS["samples_details_table"]
     
     # Get trimmings in the 5' ends done previously (for example in qc).
-    five_prime_trim = pipelineAtacseq.getSampleQCShift(sample_name, sample_details)
+    five_prime_trim = 0 # pipelineAtacseq.getSampleQCShift(sample_name, sample_details)
     
     integer_five_prime_correction = 0
     
@@ -642,7 +640,7 @@ def shiftTagAlign(infile, outfile):
     # 0 Case: no correction, empty string
     
     # Get the contigs
-    contigs = PARAMS["general_contigs"]
+    contigs = PARAMS["contigs"]
     log_file = P.snip(outfile, ".PE2SE.tn5_shifted.tagAlign.gz") + ".tn5_shifted.log"
     
     # Temp file: We create a temp file to make sure the whole process goes well
@@ -656,9 +654,11 @@ def shiftTagAlign(infile, outfile):
                    | awk -F $'\\t' 
                      'BEGIN {OFS = FS}
                      { if ($6 == "+") {
-                         $2 = $2 + 4%(positive_strand_correction)s
-                        } else if ($6 == "-") {
-                         $3 = $3 - 5%(negative_strand_correction)s} print $0}'
+                         $2 = $2 + 4 %(positive_strand_correction)s
+                       } else if ($6 == "-") {
+                         $3 = $3 - 5 %(negative_strand_correction)s
+                       } 
+                       print $0}'
                    | gzip -c 
                    > %(temp_file)s 
                    2> %(log_file)s; 
@@ -704,6 +704,114 @@ def filterShiftTagAlign(infile, outfile):
                                                                     excluded_beds, 
                                                                     temp_file)
     
-    statement += '''mv %(temp_file)s %(outfile)s'''
+    statement += ''' && mv %(temp_file)s %(outfile)s'''
 
     P.run(statement)
+
+
+#--------------------------------------------------------------------------------------
+@follows(mkdir("filtered_tag_align_count_balanced.dir"))
+@transform(filterShiftTagAlign,
+           regex("filtered_tag_align.dir/(.+).single.end.shifted.filtered.tagAlign.gz"),
+           r"filtered_tag_align_count_balanced.dir/\1.tsv",
+           r"\1")
+def calculateNumberOfSingleEnds(infile, outfile, sample):
+    '''Get the number of single end reads entering the peak calling'''
+        
+    statement = '''echo %(sample)s,`zcat %(infile)s | wc -l` > %(outfile)s
+                    '''
+    
+    P.run(statement)
+
+
+#----------------------------------------------------------------------------------------
+@merge(calculateNumberOfSingleEnds, "filtered_tag_align_count_balanced.dir/reads_per_sample.csv")
+def mergeSingleEndsCount(infiles, outfile):
+    ''' Merge together all the SE counts into a single table '''
+
+    infiles = " ".join(infiles)
+    statement = ''' echo sample,n_se > %(outfile)s &&
+                    cat %(infiles)s >> %(outfile)s '''
+    P.run(statement)
+
+
+#----------------------------------------------------------------------------------------
+@follows(mergeSingleEndsCount)
+def get_single_ends():
+    pass
+
+##########################################################################################
+# Generate Peak sets
+
+@follows(mkdir("pan_balanced_samples.dir"),
+         mkdir("subtype_balanced_samples.dir"))
+@subdivide(filterShiftTagAlign,
+           regex("filtered_tag_align.dir/(.+).bowtie2.single.end.shifted.filtered.tagAlign.gz"),
+           add_inputs(mergeSingleEndsCount, "samples.tsv"),
+           [r"pan_balanced_samples.dir/\1.single.end.shifted.filtered.tagAlign.gz",
+            r"subtype_balanced_samples.dir/\1.single.end.shifted.filtered.tagAlign.gz"],
+            r"\1")
+def get_balanced_sample_filtered_shifted_SE(infiles, outfiles, sample_name):
+    ''' Samples a random sample of reads from each sample. Each sample contains the same
+    number of reads: the minimum sample single ends. Returns a file with the same sorting
+    as the input'''
+    
+    # Get the temporal dir specified
+    tmp_dir = PARAMS["general_temporal_dir"]
+    
+    # Create temp files to make sure the process doesn't create the files
+    # until it is finished 
+    
+    temp_extract_bed = (tempfile.NamedTemporaryFile(dir=tmp_dir, delete=False)).name
+    
+    # Separate the infiles
+    bed_tags, read_count_file, sample_info = infiles
+    
+    sample_info = pandas.read_csv(sample_info, sep="\t")
+    read_counts = pandas.read_csv(read_count_file, sep=",")
+
+    read_counts["sample"] = read_counts["sample"].str.replace(".bowtie2","")
+    sample_info = sample_info.merge(read_counts, left_on="ATAC.sample.code", right_on="sample")
+    sample_info = sample_info.set_index("sample")
+
+    min_per_status = sample_info.groupby("MM.ND").n_se.min()
+    min_per_subtype = sample_info.groupby("Subgroup").n_se.min()
+
+    get_reads_status = min_per_status[sample_info["MM.ND"][sample_name]]
+    get_reads_subtype = min_per_subtype[sample_info["Subgroup"][sample_name]]
+             
+    # Extract the file and generate the sample
+    statement_template = '''zcat %(bed_tags)s > %(temp_extract_bed)s &&
+                    
+                    sample -o --preserve-order -d 50 -k %(output_reads)s %(temp_extract_bed)s | gzip > %(outfile)s &&
+                    
+                    rm %(temp_extract_bed)s 
+                    
+                    '''
+    
+    for outfile in outfiles:
+        if "pan" in outfile:
+            output_reads = get_reads_status
+        else:
+            output_reads = get_reads_subtype
+
+        statements.append(statement_template % locals())
+
+    # Samples with number of single ends > 100M
+    job_memory = "8G"
+    
+    P.run(statements)
+
+##########################################################################################
+##                   Targets          
+##########################################################################################
+
+@follows(getFirstFilteringStats,
+        getInitialMappingStats,
+        getPostDuplicationStats,
+        calculateLibrarycomplexity)
+def get_stats():
+    pass
+
+if __name__ == "__main__":
+    sys.exit(P.main(sys.argv))

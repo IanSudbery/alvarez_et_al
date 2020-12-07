@@ -33,12 +33,18 @@ def getMappedUnmappedReads(infile, outfile):
     elif (file_extension.lower() == '.bam'):
         samfile = pysam.AlignmentFile(infile, "rb")
     
+    # Create the name of the files for the unmapped and mapped reads
+    out_unmapped_basename = P.snip(os.path.basename(outfile), '.tsv') + '.unmapped.txt.gz'
+    out_unmapped = os.path.join(os.path.dirname(outfile), (out_unmapped_basename))
+      
+    out_mapped_basename = P.snip(os.path.basename(outfile), '.tsv') + '.mapped.txt.gz'
+    out_mapped = os.path.join(os.path.dirname(outfile), (out_mapped_basename))
+    
     # Unmapped readnames
-    unmapped = []
+    unmapped = IOTools.open_file(out_unmapped, "w")
     
     # Mapped readnames
-    mapped = []
-    
+    mapped = IOTools.open_file(out_mapped, "w")
     
     dictionary = {'read_name': 'first', 'mapped': 'no'}
     
@@ -76,13 +82,13 @@ def getMappedUnmappedReads(infile, outfile):
   
             # If the last read wasn't mapped, store it
             if dictionary['mapped'] == 'no':
-                unmapped.append(dictionary['read_name'])   
+                unmapped.write(dictionary['read_name']+"\n")   
                 # Add one read to the unmapped
                 c["unmapped"] += 1
                   
             else:
                   
-                mapped.append(dictionary['read_name'])
+                mapped.write(dictionary['read_name'] + "\n") 
                 # Add one read to the mapped
                 c["mapped"] += 1
                
@@ -101,33 +107,14 @@ def getMappedUnmappedReads(infile, outfile):
     # The last read is hanging
     # If it is unmapped, store it
     if dictionary['mapped'] == 'no':
-        unmapped.append(read_name)  
+        unmapped.write(read_name + "\n")  
         # Add one read to the unmapped
         c["unmapped"] += 1    
     else:          
-        mapped.append(dictionary['read_name'])
+        mapped.write(dictionary['read_name'] + "\n")
 
         # Add one read to the mapped
         c["mapped"] += 1
-      
-     
-     
-    # Create the name of the files for the unmapped and mapped reads
-    out_unmapped_basename = P.snip(os.path.basename(outfile), '.tsv') + '.unmapped.txt.gz'
-    out_unmapped = os.path.join(os.path.dirname(outfile), (out_unmapped_basename))
-      
-    out_mapped_basename = P.snip(os.path.basename(outfile), '.tsv') + '.mapped.txt.gz'
-    out_mapped = os.path.join(os.path.dirname(outfile), (out_mapped_basename))
-     
-    # Store the unmapped read names in the outfile specified
-    with IOTools.open_file(out_unmapped, "w") as output_file_write:
-        for unmapped_read in unmapped:
-            output_file_write.write(unmapped_read + '\n')
-
-    # Store the mapped read names in the outfile specified
-    with IOTools.open_file(out_mapped, "w") as output_file_write:
-        for mapped_read in mapped:
-            output_file_write.write(mapped_read + '\n')
   
     # Store the counters        
      
@@ -775,7 +762,10 @@ def createExcludingBedsFromBedStatement(infile, excluded_beds, outfile):
     statement = ""
     
     # Get the string into a list, separating the elements
-    list_excluded_beds = excluded_beds.split(",")
+    try:
+        list_excluded_beds = excluded_beds.split(",")
+    except AttributeError:
+        list_excluded_beds = excluded_beds
     
     # If no excluded beds provided just copy the file
     if len(list_excluded_beds) == 0:
