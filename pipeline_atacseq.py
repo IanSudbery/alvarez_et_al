@@ -1,4 +1,4 @@
-from ruffus import follows, transform, add_inputs, mkdir, regex, formatter, merge, subdivide
+from ruffus import follows, transform, add_inputs, mkdir, regex, formatter, merge, subdivide, files, collate
 #from ruffus.combinatorics import *
 
 import sys
@@ -759,11 +759,6 @@ def get_balanced_sample_filtered_shifted_SE(infiles, outfiles, sample_name):
     # Get the temporal dir specified
     tmp_dir = PARAMS["general_temporal_dir"]
     
-    # Create temp files to make sure the process doesn't create the files
-    # until it is finished 
-    
-    temp_extract_bed = (tempfile.NamedTemporaryFile(dir=tmp_dir, delete=False)).name
-    
     # Separate the infiles
     bed_tags, read_count_file, sample_info = infiles
     
@@ -774,26 +769,29 @@ def get_balanced_sample_filtered_shifted_SE(infiles, outfiles, sample_name):
     sample_info = sample_info.merge(read_counts, left_on="ATAC.sample.code", right_on="sample")
     sample_info = sample_info.set_index("sample")
 
-    min_per_status = sample_info.groupby("MM.ND").n_se.min()
-    min_per_subtype = sample_info.groupby("Subgroup").n_se.min()
+    #min_per_status = sample_info.groupby("MM.ND").n_se.min()
+    #min_per_subtype = sample_info.groupby("Subgroup").n_se.min()
 
-    get_reads_status = min_per_status[sample_info["MM.ND"][sample_name]]
-    get_reads_subtype = min_per_subtype[sample_info["Subgroup"][sample_name]]
-             
+    #get_reads_status = min_per_status[sample_info["MM.ND"][sample_name]]
+    #get_reads_subtype = min_per_subtype[sample_info["Subgroup"][sample_name]]
+
+    output_reads = sample_info[sample_info["MM.ND"].isin(["MM","ND"])].n_se.min()
+    if sample_name in ["A26.20", "A26.18"]:
+        output_reads=output_reads/2
+           
     # Extract the file and generate the sample
     statement_template = '''zcat %(bed_tags)s > %(temp_extract_bed)s &&
                     
-                    sample -o --preserve-order -d 50 -k %(output_reads)s %(temp_extract_bed)s | gzip > %(outfile)s &&
+                    sample -o --preserve-order -d 51 -k %(output_reads)s %(temp_extract_bed)s | gzip > %(outfile)s &&
                     
                     rm %(temp_extract_bed)s 
                     
                     '''
     
+    statements = [] 
+
     for outfile in outfiles:
-        if "pan" in outfile:
-            output_reads = get_reads_status
-        else:
-            output_reads = get_reads_subtype
+        temp_extract_bed = (tempfile.NamedTemporaryFile(dir=tmp_dir, delete=False)).name
 
         statements.append(statement_template % locals())
 
@@ -802,6 +800,331 @@ def get_balanced_sample_filtered_shifted_SE(infiles, outfiles, sample_name):
     
     P.run(statements)
 
+#----------------------------------------------------------------------------------------
+def get_files_for_pooling():
+    '''This generator makes the tuples for @files that will be used to pool the balanced samples
+    into pan-MM/ND and subtype read pools for peak calling'''
+
+    sample_info = pandas.read_csv("samples.tsv", sep="\t")
+
+    for pan in ["MM", "ND"]:
+        samples = sample_info[sample_info["MM.ND"] == pan]["ATAC.sample.code"]
+        dirname = "pan_balanced_samples.dir"
+        outfile = os.path.join(dirname, "%s_pooled_pan.single.end.shifted.filtered.tagAlign.gz" 
+                                        % pan)
+        infiles = [os.path.join(dirname, "%s.single.end.shifted.filtered.tagAlign.gz") % s 
+                   for s in samples]
+        yield (infiles, outfile)
+
+    for subtype in set(sample_info["Subgroup"]):
+        if subtype == "UNKNOWN":
+            continue 
+
+        if subtype =="Cell_line":
+            continue
+
+        samples = sample_info[sample_info["Subgroup"] == subtype]["ATAC.sample.code"]
+        dirname = "subtype_balanced_samples.dir"
+        outfile = os.path.join(dirname, "%s_pooled_subtype.single.end.shifted.filtered.tagAlign.gz" 
+                                        % subtype)
+        infiles = [os.path.join(dirname, "%s.single.end.shifted.filtered.tagAlign.gz") % s 
+                   for s in samples]
+        yield (infiles, outfile)
+
+@follows(get_balanced_sample_filtered_shifted_SE)
+@files(get_files_for_pooling)
+def pool_balanced_single_ends(infiles, outfile):
+    '''Pool the downsampled balanced single-end aligned tags for subgroup
+    and also for MM and ND'''
+
+    infiles = " ".join(infiles)
+    statement = '''zcat %(infiles)s | gzip > %(outfile)s'''
+    P.run(statement)
+
+#----------------------------------------------------------------------------------------
+@follows(mkdir("filtered_peaks_broad.dir"),
+         mkdir("pan_peaks_broad.dir"),
+         mkdir("subtype_peaks_broad.dir"))
+@subdivide((filterShiftTagAlign,
+            pool_balanced_single_ends),
+           regex("([^_]+)_.+.dir/(.+).single.end.shifted.filtered.tagAlign.gz"),
+           [r"\1_peaks_broad.dir/\2_peaks.broadPeak.gz",
+            r"\1_peaks_broad.dir/\2_peaks.gappedPeak.gz"],
+           r"\2")
+def call_peaks_broad(infile, outfiles, sample):
+    ''' Use MACS2 to calculate broad peaks and gapped peaks.
+    Sorts the output by -log10pvalue,
+    formats the name of the broad and gapped peaks '''
+    
+    # Get the thresholding values for MACS2
+    threshold_method = PARAMS["macs2_threshold_method"].lower()
+    
+    # If nothing specified default to p (p-value)
+    if threshold_method == "":
+        threshold_method = "p"
+    elif threshold_method not in ["p", "q"]:
+        raise Exception("threshold method specified not valid")
+    
+    
+    threshold_quantity = PARAMS["macs2_threshold_quantity"]
+    
+    # If nothing specified default to 0.01
+    if threshold_quantity == "":
+        threshold_quantity = "0.01"
+        
+    
+    # Get the read extending and shift values
+    shift_parameter = PARAMS["end_extending_shift"]
+    
+    # If nothing specified default to -100
+    if shift_parameter == "":
+        shift_parameter = "-100"
+      
+    extsize_parameter = PARAMS["end_extending_extsize"]
+    
+    # If nothing specified default to 200
+    if extsize_parameter == "":
+        extsize_parameter = "200"
+    
+    # Get the temporal dir specified
+    tmp_dir = PARAMS["general_temporal_dir"]
+    
+    # Get the directory for the outfile
+    outdir = os.path.dirname(outfiles[0])
+    
+    # Create a temporal directory name for the run
+    peaks_temp_dir = tempfile.mkdtemp(dir=tmp_dir)
+    
+    # Get the name of the peak file (_peaks.broadPeak.gz)
+    outfile_basename = os.path.basename(outfiles[0])
+    outfile_basename_prefix = P.snip(outfile_basename, "_peaks.broadPeak.gz")
+    
+    # Create the prefix to create the files in the temporal directory
+    # and with the name of the run
+    outfile_prefix = os.path.join(peaks_temp_dir, outfile_basename_prefix)
+    
+    # Final outfile names for the post-processed files
+    broad_peaks_final_outfile = outfiles[0]
+    gappedPeak_peaks_final_outfile = outfiles[1]
+    
+    
+    # 1) Calculate peaks, will create .xls, .broadPeak and .gappedPeak in temp dir
+    # 2) Process the .broadPeak and .gappedPeak and output in outdir
+    # 3) Delete the .broadPeak and .gappedPeak temp files
+    # 4) Copy the remaining created files from temp dir to outdir
+    statement = '''macs2 callpeak 
+                      -t %(infile)s 
+                      -f BED 
+                      -n %(outfile_prefix)s 
+                      -g hs 
+                      -%(threshold_method)s %(threshold_quantity)s 
+                      --nomodel 
+                      --shift %(shift_parameter)s 
+                      --extsize %(extsize_parameter)s 
+                      --broad 
+                      --broad-cutoff %(threshold_quantity)s
+                      --keep-dup all
+                      --tempdir %(tmp_dir)s &&
+        
+    sort -k 8gr,8gr %(outfile_prefix)s_peaks.broadPeak 
+    | awk 'BEGIN{OFS="\\t"}{$4="Peak_"NR ; print $0}'
+    | gzip -c > %(broad_peaks_final_outfile)s &&
+      
+    rm %(outfile_prefix)s_peaks.broadPeak &&
+      
+    sort -k 14gr,14gr %(outfile_prefix)s_peaks.gappedPeak 
+    | awk 'BEGIN{OFS="\\t"}{$4="Peak_"NR ; print $0}' | 
+    gzip -c > %(gappedPeak_peaks_final_outfile)s &&
+        
+    rm %(outfile_prefix)s_peaks.gappedPeak &&
+    
+    mv %(outfile_prefix)s* %(outdir)s
+    '''
+    
+    # The pooled datasets contain a lot of reads, it is advisable to up
+    # the memory in this case
+    job_memory = "4G"
+    
+    # Pooled samples for this pipeline
+    if ("pooled" in sample):
+        
+        job_memory = "10G"
+    
+    P.run(statement, job_condaenv="macs2")
+
+
+#----------------------------------------------------------------------------------------
+@follows(mkdir("filtered_peaks_narrow.dir"),
+         mkdir("pan_peaks_narrow.dir"),
+         mkdir("subtype_peaks_narrow.dir"))
+@subdivide((filterShiftTagAlign,
+            pool_balanced_single_ends),
+           regex("([^_]+)_.+.dir/(.+).single.end.shifted.filtered.tagAlign.gz"),
+           [r"\1_peaks_narrow.dir/\2_peaks.narrowPeak.gz",
+             r"\1_peaks_narrow.dir/\2_summits.bed"],
+           r"\2")
+def call_peaks_narrow(infile, outfiles, sample):
+    ''' Use MACS2 to calculate peaks '''
+    
+    # Get the thresholding values for MACS2
+    threshold_method = PARAMS["macs2_threshold_method"].lower()
+    
+    # If nothing specified default to p (p-value)
+    if threshold_method == "":
+        threshold_method = "p"
+    elif threshold_method not in ["p", "q"]:
+        raise Exception("threshold method specified not valid")
+    
+    
+    threshold_quantity = PARAMS["macs2_threshold_quantity"]
+    
+    # If nothing specified default to p (p-value)
+    if threshold_quantity == "":    
+        threshold_quantity = "0.01"
+    
+    # Get the read extending and shift values
+    shift_parameter = PARAMS["end_extending_shift"]
+    
+    # If nothing specified default to -100
+    if shift_parameter == "": 
+        shift_parameter = "-100"
+    
+    extsize_parameter = PARAMS["end_extending_extsize"]
+    
+    # If nothing specified default to 200
+    if extsize_parameter == "":
+        extsize_parameter = "200"
+    
+    # Get the temporal dir specified
+    tmp_dir = PARAMS["general_temporal_dir"]
+    
+    # Get the directory for the outfile
+    outdir = os.path.dirname(outfiles[0])
+    
+    # Create a temporal directory name for the run
+    peaks_temp_dir = tempfile.mkdtemp(dir=tmp_dir)
+    
+    # Get the name of the peak file (_peaks.narrowPeak.gz)
+    outfile_basename = os.path.basename(outfiles[0])
+    
+    outfile_basename_prefix = P.snip(outfile_basename, "_peaks.narrowPeak.gz")
+    
+    # Create the prefix to create the files in the temporal directory
+    # and with the name of the run
+    outfile_prefix = os.path.join(peaks_temp_dir, outfile_basename_prefix)
+    
+    # Final outfile names for the post-processed files
+    narrow_peaks_final_outfile = outfiles[0]
+    
+    # 1) Calculate peaks, will create .xls, .narrowPeak in temp dir
+    # 2) Process the .narrowPeak and output in outdir: Note that MACS2 can create multiple narrow peaks (Doesn't happen with broad peaks)
+    #    with the same coordinate and different significance. According to http://seqanswers.com/forums/showthread.php?t=50394
+    #    these are summits within the same peak. To sort this out, whenever there are multiple rows with the same coordinates we
+    #    get the row with the highest -log10pvalue (column 8), using sort as in https://unix.stackexchange.com/questions/230040/keeping-first-instance-of-duplicates
+    # 3) Delete the .narrowPeak temp files
+    # 4) Copy the remaining created files from temp dir to outdir
+    statement = '''macs2 callpeak 
+                     -t %(infile)s 
+                     -f BED 
+                      -n %(outfile_prefix)s 
+                      -g hs 
+                      -%(threshold_method)s %(threshold_quantity)s 
+                      --nomodel 
+                      --shift %(shift_parameter)s 
+                      --extsize %(extsize_parameter)s 
+                      -B 
+                      --SPMR 
+                      --keep-dup all
+                      --call-summits
+                      --tempdir %(tmp_dir)s &&
+
+    cat %(outfile_prefix)s_peaks.narrowPeak 
+    | sort -k1,3 -k8gr 
+    | sort -k1,3 -u 
+    | sort -k8gr  
+    | awk 'BEGIN{OFS="\\t"}{$4="Peak_"NR ; print $0}' 
+    | gzip -c > %(narrow_peaks_final_outfile)s &&
+    
+    rm %(outfile_prefix)s_peaks.narrowPeak &&
+    
+    mv %(outfile_prefix)s* %(outdir)s
+    '''
+    
+    # The pooled datasets contain a lot of reads, it is advisable to up
+    # the memory in this case
+    job_memory = "4G"
+    
+    if ("pooled" in sample):
+        job_memory = "10G"        
+    
+    P.run(statement, job_condaenv="macs2")
+
+
+#------------------------------------------------------------------------------
+@follows(mkdir("filtered_peaks.dir"))
+@transform([call_peaks_broad, call_peaks_narrow],
+           regex(".+/(.+).gz"),
+           r"filtered_peaks.dir/\1.gz")
+def filter_peaks(infile, outfile):
+    ''' Filters out regions of low mappability and excessive mappability '''
+    
+    # Temp file: We create a temp file to make sure the whole process goes well
+    # before the actual outfile is created
+    temp_file = P.snip(outfile, ".gz") + "_temp.gz"
+    
+    excluded_beds = PARAMS["filtering_bed_exclusions"]
+    
+    statement = pipelineAtacseq.createExcludingBedsFromBedStatement(infile, 
+                                                                    excluded_beds, 
+                                                                    temp_file)
+    
+    statement += ''' &&
+                    mv %(temp_file)s %(outfile)s'''
+
+    P.run(statement)
+#----------------------------------------------------------------------------------------
+
+@collate(filter_peaks,
+        regex(".+/(.+).(broadPeak|narrowPeak).gz"),
+        r"filtered_peaks.dir/\1.mergedpeaks.gz")
+def merge_broad_narrow_peaks(infiles, outfile):
+    '''Merge the broad and narrow peak files for each sample, merging any peaks less than
+    100 nt away from another peak'''
+
+    infiles = " ".join(infiles)
+    statement = '''zcat %(infiles)s
+                   | sort -k1,1 -k2,2n 
+                   | awk 'FS="\\t" {printf ("%%s\\t%%s\\t%%s\\t%%s\\n", $1, $2, $3, $6)'} 
+                   | bedtools merge -i stdin -d 200
+                   | sort -k1,1 -k2,2n 
+                   | gzip -c > %(outfile)s '''
+
+    P.run(statement)
+
+
+@collate(merge_broad_narrow_peaks,
+        regex(".+/(.+)_pooled_(.+)_peaks.mergedpeaks.gz"),
+        r"filtered_peaks.dir/\2_merged_peaks.bed.gz")
+def merge_pooled_peaks(infiles, outfile):
+    '''Merge MM and ND peaks to get pan merged peaks, and the peaks for each subtype to get
+    balanced subtype peaks'''
+
+    infiles = " ".join(infiles)
+    statement = '''zcat %(infiles)s
+                   | sort -k1,1 -k2,2n 
+                   | awk 'FS="\\t" {printf ("%%s\\t%%s\\t%%s\\t%%s\\n", $1, $2, $3, $6)'} 
+                   | bedtools merge -i stdin -d 200
+                   | sort -k1,1 -k2,2n 
+                   | gzip -c > %(outfile)s '''
+
+    P.run(statement)
+
+
+@follows(call_peaks_broad,
+         call_peaks_narrow)
+def call_peaks():
+    ''' Dummy task to sync the call of peaks '''
+    pass
 ##########################################################################################
 ##                   Targets          
 ##########################################################################################

@@ -797,3 +797,61 @@ def createExcludingBedsFromBedStatement(infile, excluded_beds, outfile):
             
     return statement
                  
+
+
+
+# Creates a statement to exclude from the peaks infile the bed regions
+# indicated in excluded_beds and saves the processed file to outfile
+#
+# Inputs:
+#    -infile: bed infile (compressed or uncompressed) to process.
+#    -excluded_beds: list of chrs to exclude (separated by |)
+#    -outfile: processed file without the chrs.
+#
+# Outputs:
+#    -Writes the processed file to outfile.
+@cluster_runnable
+def createExcludingBedsFromBedStatement(infile, excluded_beds, outfile):
+    
+    statement = ""
+    
+    # Get the string into a list, separating the elements
+    if isinstance(excluded_beds, str):
+        list_excluded_beds = list(excluded_beds)
+    else:
+        list_excluded_beds = excluded_beds
+
+    # If no excluded beds provided just copy the file
+    if len(list_excluded_beds) == 0:
+        
+        statement = "cp "+infile+" "+outfile
+    
+    
+    else:                    
+        
+        # Create the statement
+        # Because sometimes inputing a compressed file to bedtools intersect
+        # can cause problems (https://github.com/arq5x/bedtools2/issues/513)
+        # The file is zcat first and inputted to bedtools intersect -a stdin
+        if infile.endswith(".gz"):
+            
+            statement += "zcat "+infile
+            
+        else:
+            
+            statement += "cat "+infile
+        
+        statement += " | bedtools intersect -v -a stdin"
+        statement += " -b "
+        
+        for excluded_bed in list_excluded_beds:
+            
+            statement += excluded_bed
+            statement += " "
+        
+        
+        statement += " | gzip -c > "
+        statement += outfile
+
+            
+    return statement
