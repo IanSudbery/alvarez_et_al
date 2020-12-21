@@ -1,4 +1,5 @@
-from ruffus import follows, transform, add_inputs, mkdir, regex, formatter, merge, subdivide, files, collate
+from ruffus import follows, transform, add_inputs, mkdir, regex, formatter, merge, subdivide, files, collate, suffix
+from ruffus.combinatorics import product
 #from ruffus.combinatorics import *
 
 import sys
@@ -1120,11 +1121,138 @@ def merge_pooled_peaks(infiles, outfile):
     P.run(statement)
 
 
-@follows(call_peaks_broad,
-         call_peaks_narrow)
+@follows(merge_pooled_peaks,
+         merge_broad_narrow_peaks)
 def call_peaks():
     ''' Dummy task to sync the call of peaks '''
     pass
+
+
+##########################################################################################
+# Peak Quantitation
+##########################################################################################
+@transform(shiftTagAlign,
+           regex(".+\.dir/(.+).PE2SE.tn5_shifted.tagAlign.gz"),
+           r"final_tag_align.dir/\1.five.prime.only.single.end.processed.tagAlign.gz")
+def get_five_prime_only_single_ends(infile, outfile):
+    ''' It creates a 1bp region for each shifted SE with the 5' end only (strand-aware).
+    Sorts the output '''
+    
+    # Get the temporal dir specified
+    tmp_dir = PARAMS["general_temporal_dir"]
+    
+    # To make sure the run is complete before copying the result to the outfile
+    outfile_temp = (tempfile.NamedTemporaryFile(dir=tmp_dir, delete=False)).name
+    
+    
+    
+    # Gets a 1bp region with the 5' end (strand-aware) and sorts the tagAlignFile
+    statement = '''zcat %(infile)s 
+                   | awk 'BEGIN {
+                            FS ="\\t"; OFS = FS
+                          } 
+
+                          { if ($6 == "+") {
+                                $3 = $2+1
+                          } else if ($6 == "-") {
+                                $2 = $3-1
+                          } 
+                          print $0}'
+                   | sort -k 1,1 -k2,2n 
+                   | gzip -c > %(outfile_temp)s  &&
+    
+                   mv %(outfile_temp)s %(outfile)s
+    '''
+    
+    P.run(statement)
+
+
+@transform(get_five_prime_only_single_ends,
+           regex(".+\.dir/(.+).five.prime.only.single.end.processed.tagAlign.gz"),
+           r"filtered_tag_align.dir/\1.five.prime.only.single.end.processed.filtered.tagAlign.gz")
+def filter_five_prime_only_single_ends(infile, outfile):
+    ''' Filters out regions of low mappability and excessive mappability in the 1bp five prime single ends'''
+    
+    # Reuse the filter_peaks function
+    filter_peaks(infile, outfile)
+
+
+#------------------------------------------------------------------------------
+@follows(mkdir("tag_counts.fir"))
+@product(filter_five_prime_only_single_ends,
+         formatter(".+\.dir/(?P<SAMPLE>.+).five.prime.only.single.end.processed.filtered.tagAlign.gz"),
+         merge_pooled_peaks,
+         formatter(".+/(?P<PEAKS>.+)_merged_peaks.bed.gz"),
+         "tag_counts.dir/{SAMPLE[0][0]}_vs_{PEAKS[1][0]}.tag_counts.gz")
+def overlap_sample_with_common_peaks(infiles, outfile):
+    ''' For each common peak to all the samples, it calculates the number of filtered
+    extended 5' 1bp single ends of reads from the sample which fall in that region.
+    An overlap is considered valid if all the SE (1bp) is overlapped by a feature
+    (common peak). Produces one line for each common peak, regardless of whether
+     there is or not intersection'''
+    extended_tag_align = infiles[0]
+    merged_common_peaks = infiles[1]
+     
+    # Get the temporal dir specified
+    tmp_dir = PARAMS["general_temporal_dir"]
+    
+    # To make sure the run is complete before copying the result to the outfile
+    outfile_temp = (tempfile.NamedTemporaryFile(dir=tmp_dir, delete=False)).name
+     
+    # The common_peaks file is already sorted
+    # Intersect and count the number of reads in each common_peak
+    statement = '''bedtools intersect 
+                              -sorted -c 
+                              -a %(merged_common_peaks)s 
+                              -b %(extended_tag_align)s 
+                   | gzip -c > %(outfile_temp)s &&
+                   
+                   mv %(outfile_temp)s %(outfile)s
+    '''
+     
+    P.run(statement)
+
+
+#------------------------------------------------------------------------------
+@collate(overlap_sample_with_common_peaks,
+         regex(".+/(.+)_vs_(.+).tag_counts.gz"),
+         r"tag_counts.dir/\2_raw_tag_counts.bed_header.gz")
+def group_tag_counts_per_peakset(infiles, outfile):
+    '''Take the counts of each sample against each peakset and generate a matrix
+    with peak positions and the counts of every sample across that peakset. 
+    Sample titles will be shortened. Note that they will have no "A" on the
+    start'''
+
+    col_names = " ".join([re.match("tag_counts.dir/A(.+).bowtie2_vs_", infile).groups()[0]
+                         for infile in infiles] )
+    infiles = " ".join(infiles)
+
+    statement = '''bedtools unionbedg 
+                             -header
+                             -names %(col_names)s
+                             -i %(infiles)s
+                    | gzip > %(outfile)s'''
+
+    P.run(statement)
+
+
+@transform(group_tag_counts_per_peakset,
+           suffix("bed_header.gz"),
+           "tsv.gz")
+def combine_bed_cols_to_id(infile, outfile):
+    '''Currently the peaks are formatted as bed files - first three columns are contig,
+    start and end. These need to be merged into a single column - id - for DE analysis'''
+
+    statement = '''zcat %(infile)s
+                 | awk 'BEGIN{FS="\\t";OFS=FS}
+                        {$1=$1":"$2"-"$3; 
+                         $2=""; $3=""}
+                        {printf("%%s\\n",$0)}'
+                 | cut --complement -f 2,3
+                 | awk 'BEGIN{FS="\\t";OFS=FS} NR==1 {$1="id"} {print $0}'
+                 | gzip > %(outfile)s'''
+
+    P.run(statement)
 ##########################################################################################
 ##                   Targets          
 ##########################################################################################
