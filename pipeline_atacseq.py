@@ -11,6 +11,7 @@ import pipelineAtacseq
 import tempfile
 import re
 import cgatcore.iotools as IOTools
+import cgatpipelines.tasks.rnaseq as rnaseq
 import pandas
 #sys.path.insert(0, "/home/mbp15ja/dev/AuxiliaryPrograms/Segmentations/")
 #import compareSegmentations as compseg
@@ -1236,6 +1237,7 @@ def group_tag_counts_per_peakset(infiles, outfile):
     P.run(statement)
 
 
+#------------------------------------------------------------------------------
 @transform(group_tag_counts_per_peakset,
            suffix("bed_header.gz"),
            "tsv.gz")
@@ -1253,6 +1255,334 @@ def combine_bed_cols_to_id(infile, outfile):
                  | gzip > %(outfile)s'''
 
     P.run(statement)
+
+
+#------------------------------------------------------------------------------
+@transform(combine_bed_cols_to_id,
+           suffix(".tsv.gz"),
+           add_inputs("samples.tsv"),
+           ".collapsed.tsv.gz")
+def collapse_tech_reps(infiles, outfile):
+    '''Technical replicates are seperate libraries created from the sample underlying
+    sample. Here we sum counts from technical replicates'''
+
+    script = os.path.join(os.path.dirname(__file__), "scripts/R_collapseReps.R")
+    counts, coldata = infiles
+    statement = '''Rscript %(script)s %(counts)s %(coldata)s rep_id %(outfile)s'''
+    P.run(statement)
+
+
+
+##########################################################################################
+# RNA Processing
+##########################################################################################
+@mkdir('geneset.dir')
+@transform(PARAMS['geneset'],
+           regex("(\S+).gtf.gz"),
+           r"geneset.dir/\1.fa")
+def buildReferenceTranscriptome(infile, outfile):
+    '''
+    Builds a reference transcriptome from the provided GTF geneset - generates
+    a fasta file containing the sequence of each feature labelled as
+    "exon" in the GTF.
+    --fold-at specifies the line length in the output fasta file
+
+    Parameters
+    ----------
+    infile: str
+        path to the GTF file containing transcript and gene level annotations
+    genome_dir: str
+        :term: `PARAMS` the directory of the reference genome
+    genome: str
+        :term: `PARAMS` the filename of the reference genome (without .fa)
+    outfile: str
+        path to output file
+    '''
+
+    genome_file = os.path.abspath(
+        os.path.join(PARAMS["genome_dir"], PARAMS["genome"] + ".fa"))
+
+    statement = '''
+    zcat %(infile)s |
+    awk '$3=="exon"'|
+    cgat gff2fasta
+    --is-gtf --genome-file=%(genome_file)s --fold-at=60 -v 0
+    --log=%(outfile)s.log > %(outfile)s &&
+    samtools faidx %(outfile)s
+    '''
+
+    P.run(statement)
+
+
+#-----------------------------------------------------------------------------------------
+@transform(buildReferenceTranscriptome,
+           suffix(".fa"),
+           ".salmon.index")
+def buildSalmonIndex(infile, outfile):
+    '''
+    Builds a salmon index for the reference transriptome
+    Parameters
+    ----------
+    infile: str
+       path to reference transcriptome - fasta file containing transcript
+       sequences
+    salmon_kmer: int
+       :term: `PARAMS` kmer size for salmon.  Default is 31.
+       Salmon will ignores transcripts shorter than this.
+    salmon_index_options: str
+       :term: `PARAMS` string to append to the salmon index command to
+       provide specific options e.g. --force --threads N
+    outfile: str
+       path to output file
+    '''
+
+    job_memory = "16G"
+    job_threads = 2
+    # need to remove the index directory (if it exists) as ruffus uses
+    # the directory timestamp which wont change even when re-creating
+    # the index files
+    statement = '''
+    rm -rf %(outfile)s;
+    salmon index -k 31 --threads 2 -t %(infile)s -i %(outfile)s
+    '''
+
+    P.run(statement)
+
+
+#-----------------------------------------------------------------------------------------
+@transform(PARAMS["geneset"],
+           formatter(),
+           "transcript2geneMap.tsv")
+def getTranscript2GeneMap(outfile):
+    ''' Extract a 1:1 map of transcript_id to gene_id from the geneset '''
+
+    iterator = GTF.iterator(iotools.open_file(PARAMS['geneset']))
+    transcript2gene_dict = {}
+
+    for entry in iterator:
+
+        # Check the same transcript_id is not mapped to multiple gene_ids!
+        if entry.transcript_id in transcript2gene_dict:
+            if not entry.gene_id == transcript2gene_dict[entry.transcript_id]:
+                raise ValueError('''multipe gene_ids associated with
+                the same transcript_id %s %s''' % (
+                    entry.gene_id,
+                    transcript2gene_dict[entry.transcript_id]))
+        else:
+            transcript2gene_dict[entry.transcript_id] = entry.gene_id
+
+    with iotools.open_file(outfile, "w") as outf:
+        outf.write("transcript_id\tgene_id\n")
+        for key, value in sorted(transcript2gene_dict.items()):
+            outf.write("%s\t%s\n" % (key, value))
+
+
+#------------------------------------------------------------------------------
+@follows(mkdir("salmon.dir"))
+@collate(("input_rna.dir/*.fastq.1.gz",
+          "input_rna.dir/*.fastq.gz",
+          "input_rna.dir/*.sra"),
+         regex(".+/(\S+).(fastq.1.gz|fastq.gz|sra)"),
+         add_inputs(buildSalmonIndex, getTranscript2GeneMap),
+         [r"salmon.dir/\1/genes.tsv",
+          r"salmon.dir/\1/tanscripts.tsv"])
+def runSalmon(infiles, outfiles):
+    '''
+    Computes read counts across transcripts and genes based on a fastq
+    file and an indexed transcriptome using Salmon.
+
+    Runs the salmon "quant" function across transcripts with the specified
+    options.  Read counts across genes are counted as the total in all
+    transcripts of that gene (based on the getTranscript2GeneMap table)
+
+    Parameters
+    ----------
+    infiles: list
+        list with three components
+        0 - list of strings - paths to fastq files to merge then quantify
+        across using salmon
+        1 - string - path to salmon index file
+        2 - string - path to table mapping transcripts to genes
+
+    salmon_threads: int
+       :term: `PARAMS` the number of threads for salmon
+    salmon_memory: str
+       :term: `PARAMS` the job memory for salmon
+    salmon_options: str
+       :term: `PARAMS` string to append to the salmon quant command to
+       provide specific
+       options, see https://salmon.readthedocs.io/en/latest/salmon.html#description-of-important-optionsç∂
+    salmon_bootstrap: int
+       :term: `PARAMS` number of bootstrap samples to run.
+       Note, you need to bootstrap for differential expression with sleuth
+       if there are no technical replicates. If you only need point estimates,
+       set to 1.
+    salmon_libtype: str
+       :term: `PARAMS` salmon library type, https://salmon.readthedocs.io/en/latest/library_type.html
+    outfiles: list
+       paths to output files for transcripts and genes
+    '''
+    fastqfile = [x[0] for x in infiles]
+    index = infiles[0][1]
+    transcript2geneMap = infiles[0][2]
+
+    transcript_outfile, gene_outfile = outfiles
+    Quantifier = rnaseq.SalmonQuantifier(
+        infile=fastqfile,
+        transcript_outfile=transcript_outfile,
+        gene_outfile=gene_outfile,
+        annotations=index,
+        job_threads=PARAMS["salmon_threads"],
+        job_memory=PARAMS["salmon_memory"],
+        options="--writeUnmappedNames --gcBias",
+        bootstrap=0,
+        libtype="A",
+        kmer=31,
+        transcript2geneMap=transcript2geneMap)
+
+    Quantifier.run_all()
+
+
+#-----------------------------------------------------------------------------
+@collate(runSalmon,
+         regex("(\S+).dir/(\S+)/transcripts.tsv.gz"),
+         [r"\1.dir/transcripts.tsv.gz",
+          r"\1.dir/genes.tsv.gz"])
+def merge_rna_counts(infiles, outfiles):
+    '''Merge counts from each sample into a single table'''
+
+    transcript_infiles = [x[0] for x in infiles]
+    gene_infiles = [x[1] for x in infiles]
+
+    transcript_outfile, gene_outfile = outfiles
+
+    def mergeinfiles(infiles, outfile):
+        final_df = pd.DataFrame()
+
+        for infile in infiles:
+            tmp_df = pd.read_table(infile, sep="\t", index_col=0)
+            final_df = final_df.merge(
+                tmp_df, how="outer",  left_index=True, right_index=True)
+
+        final_df = final_df.round()
+        final_df.sort_index(inplace=True)
+        final_df.to_csv(outfile, sep="\t", compression="gzip")
+
+    mergeinfiles(transcript_infiles, transcript_outfile)
+    mergeinfiles(gene_infiles, gene_outfile)
+
+
+#------------------------------------------------------------------------------
+@follows(mkdir("geneset.dir"))
+@transform("input_rna.dir/*.bam", formatter(),
+           add_inputs(PARAMS["geneset"]),
+           "geneset.dir/{basename[0]}.gtf.gz")
+def assembleWithStringTie(infiles, outfile):
+    '''Generate a transcript assembly from each sample using stringtie'''
+
+    infile, reference = infiles
+
+    job_threads = PARAMS["stringtie_threads"]
+    job_memory = PARAMS["stringtie_memory"]
+
+    statement = '''stringtie %(infile)s
+                           -p %(stringtie_threads)s
+                           -G <(zcat %(reference)s)
+                           2> %(outfile)s.log
+                   | gzip > %(outfile)s '''
+
+    P.run(statement)
+
+
+# ----------------------------------------------------------------------------
+@merge(assembleWithStringTie,
+        PARAMS["geneset"],
+       "geneset.dir/agg-agg-agg.gtf.gz")
+def mergeAllAssemblies(infiles, outfile):
+    '''Merge the assemblies from each sample together into a single merged
+    assembly'''
+
+    infiles = ["<(zcat %s)" % infile for infile in infiles]
+    infiles, reference = infiles[:-1], infiles[-1]
+
+    job_threads = PARAMS["stringtie_merge_threads"]
+    job_memory = "%iG" % (24.0/PARAMS["stringtie_merge_threads"])
+    infiles = " ".join(infiles)
+
+    statement = '''stringtie --merge
+                             -G %(reference)s
+                             -p %(stringtie_merge_threads)s
+                             %(infiles)s
+                            2> %(outfile)s.log
+                   | cgat gtf2gtf --method=sort
+                           --sort-order=gene+transcript
+                            -S %(outfile)s -L %(outfile)s.log'''
+
+    P.run(statement) 
+
+
+# ----------------------------------------------------------------------------
+@transform(mergeAllAssemblies,
+           regex(".+"),
+           "geneset.dir/denovo_promoters.bed.gz")
+def get_denovo_promoters(infile, outfile):
+    '''Convert the denovo generated geneset to BED12 format,
+    filter out the one exon transcripts, and get a region 2kb uptream
+    and 100bp downstream'''
+
+    contigs = os.path.join(os.path.dirnamep(__file__), "contigs.tsv")
+    statement = '''cgat gff2bed
+                           --bed12-from-transcripts
+                            -I %(infile)s
+                            -L %(outfile)s.log 
+                    | awk '$10>1' 
+                    | bedtools flank -i - -l 2000 -s -g %(contigs)s
+                    | bedtools slop -r 100 -s -g %(contigs)s
+                    | sort -k1,1 -k2,2n
+                    | gzip > %(outfile)s '''
+
+    P.run(statement)
+
+
+# ----------------------------------------------------------------------------
+@transform(PARAMS["geneset"],
+           formatter(),
+           "geneset.dir/reference_promoters.bed.gz")
+def get_reference_promoters(infile, outfile):
+    '''Get a region 2kb upstream and 100bp downstream of each transcripts. Note
+    that in contrast to the denovo transcripts processed above, we keep 1 exon
+    transcripts.'''
+
+    contigs = os.path.join(os.path.dirnamep(__file__), "contigs.tsv")
+    statement = '''cgat gff2bed
+                           --bed12-from-transcripts
+                            -I %(infile)s
+                            -L %(outfile)s.log 
+                    | bedtools flank -i - -l 2000 -s -g %(contigs)s
+                    | bedtools slop -r 100 -s -g %(contigs)s
+                    | sort -k1,1 -k2,2n
+                    | gzip > %(outfile)s '''
+
+    P.run(statement)
+
+
+# ----------------------------------------------------------------------------
+@merge([get_denovo_promoters, get_reference_promoters],
+        "all_promoters.bed.gz")
+def merge_promoters(infiles, outfile):
+    '''Merge the reference and denovo TSSes'''
+
+    infiles = " ".join(infiles)
+    statement = '''zcat %(infiles)s
+                 | sort -k1,1 -k2,2n
+                 | bedtools merge -i -
+                 | gzip > %(outfile)s'''
+
+    P.run(statement)
+
+
+@follows(merge_promoters,
+         merge_rna_counts)
 ##########################################################################################
 ##                   Targets          
 ##########################################################################################
