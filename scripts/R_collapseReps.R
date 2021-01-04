@@ -153,8 +153,20 @@ output_df = setDT(as.data.frame(output_df), keep.rownames = TRUE)[]
 colnames(output_df)[1] <- first_col_name
 
 
-# Output the file
-write.table(output_df, gzfile(output_file),
+# Output the count file
+write.table(output_df, gzfile(output_file)),
+            append = FALSE,
+            quote = FALSE,
+            sep = "\t",
+            eol = "\n",
+            na = "NA",
+            dec = ".",
+            row.names = FALSE, # The row names are already included
+            col.names = TRUE)
+
+# Output the col_data file
+col_data_file = sub(".tsv.gz", ".col_data.tsv.gz", output_file)
+write.table(col_data_df, gzfile(paste0(output_file, ".colData.tsv.gz")),
             append = FALSE,
             quote = FALSE,
             sep = "\t",

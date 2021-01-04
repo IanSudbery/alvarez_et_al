@@ -6,11 +6,12 @@ import cgatcore.experiment as E
 from cgatcore.pipeline import cluster_runnable
 import cgatcore.iotools as IOTools
 import cgatcore.pipeline as P
+from cgat import GTF
 import tempfile
 import re
 from cgat import Bed
 
-#import pandas as pd
+import pandas as pd
 #from pandas.core.frame import DataFrame
 #import numpy as np
 #import matplotlib as mpl
@@ -855,3 +856,51 @@ def createExcludingBedsFromBedStatement(infile, excluded_beds, outfile):
 
             
     return statement
+
+def gene_to_transcript_map(infile, outfile):
+    '''Parses infile GTF and extracts mapping of transcripts to gene, outputs
+    as a tsv file'''
+    
+    iterator = GTF.iterator(IOTools.open_file(infile))
+    transcript2gene_dict = {}
+
+    for entry in iterator:
+
+        # Check the same transcript_id is not mapped to multiple gene_ids!
+        if entry.transcript_id in transcript2gene_dict:
+            if not entry.gene_id == transcript2gene_dict[entry.transcript_id]:
+                raise ValueError('''multipe gene_ids associated with
+                the same transcript_id %s %s''' % (
+                    entry.gene_id,
+                    transcript2gene_dict[entry.transcript_id]))
+        else:
+            transcript2gene_dict[entry.transcript_id] = entry.gene_id
+
+    with IOTools.open_file(outfile, "w") as outf:
+        outf.write("transcript_id\tgene_id\n")
+        for key, value in sorted(transcript2gene_dict.items()):
+            outf.write("%s\t%s\n" % (key, value))
+
+
+@cluster_runnable
+def merge_counts(infiles, outfiles):
+    ''' Take salmon inputs from each file and produce a matrix of counts'''
+    transcript_infiles = [x[0] for x in infiles]
+    gene_infiles = [x[1] for x in infiles]
+
+    transcript_outfile, gene_outfile = outfiles
+
+    def mergeinfiles(infiles, outfile):
+        final_df = pd.DataFrame()
+
+        for infile in infiles:
+            tmp_df = pd.read_table(infile, sep="\t", index_col=0)
+            final_df = final_df.merge(
+                tmp_df, how="outer",  left_index=True, right_index=True)
+
+        final_df = final_df.round()
+        final_df.sort_index(inplace=True)
+        final_df.to_csv(outfile, sep="\t", compression="gzip")
+
+    mergeinfiles(transcript_infiles, transcript_outfile)
+    mergeinfiles(gene_infiles, gene_outfile)

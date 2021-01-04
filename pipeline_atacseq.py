@@ -1261,16 +1261,32 @@ def combine_bed_cols_to_id(infile, outfile):
 @transform(combine_bed_cols_to_id,
            suffix(".tsv.gz"),
            add_inputs("samples.tsv"),
-           ".collapsed.tsv.gz")
+           ".tech_reps_collapsed.tsv.gz")
 def collapse_tech_reps(infiles, outfile):
     '''Technical replicates are seperate libraries created from the sample underlying
-    sample. Here we sum counts from technical replicates'''
+    sample. Here we sum counts from technical replicates. Also outputs col_data'''
 
     script = os.path.join(os.path.dirname(__file__), "scripts/R_collapseReps.R")
     counts, coldata = infiles
     statement = '''Rscript %(script)s %(counts)s %(coldata)s rep_id %(outfile)s'''
     P.run(statement)
 
+
+#----------------------------------------------------------------------------------------
+@transform(collapse_tech_reps,
+           suffix(".tech_reps_collapsed.tsv.gz"),
+           add_inputs(r"\1.tech_reps_collapsed.col_data.tsv"),
+           ".donors_collapsed.tsv.gz")
+def collapse_cd19(infiles, outfile):
+    '''Some of the ND libraries were selected for CD19+ and some for CD19-. MOFA analysis
+    reveals little to no difference in these, and each were sequenced inthe same batch. 
+    These will be merged as doing so will remove a variable from the model. Also outputs
+    colldata '''
+
+    script = os.path.join(os.path.dirname(__file__), "scripts/R_collapseReps.R")
+    counts, coldata = infiles
+    statement = '''Rscript %(script)s %(counts)s %(coldata)s donor_id %(outfile)s'''
+    P.run(statement)
 
 
 ##########################################################################################
@@ -1353,29 +1369,11 @@ def buildSalmonIndex(infile, outfile):
 @transform(PARAMS["geneset"],
            formatter(),
            "transcript2geneMap.tsv")
-def getTranscript2GeneMap(outfile):
+def getTranscript2GeneMap(infile, outfile):
     ''' Extract a 1:1 map of transcript_id to gene_id from the geneset '''
 
-    iterator = GTF.iterator(iotools.open_file(PARAMS['geneset']))
-    transcript2gene_dict = {}
-
-    for entry in iterator:
-
-        # Check the same transcript_id is not mapped to multiple gene_ids!
-        if entry.transcript_id in transcript2gene_dict:
-            if not entry.gene_id == transcript2gene_dict[entry.transcript_id]:
-                raise ValueError('''multipe gene_ids associated with
-                the same transcript_id %s %s''' % (
-                    entry.gene_id,
-                    transcript2gene_dict[entry.transcript_id]))
-        else:
-            transcript2gene_dict[entry.transcript_id] = entry.gene_id
-
-    with iotools.open_file(outfile, "w") as outf:
-        outf.write("transcript_id\tgene_id\n")
-        for key, value in sorted(transcript2gene_dict.items()):
-            outf.write("%s\t%s\n" % (key, value))
-
+    pipelineAtacseq.gene_to_transcript_map(infile, outfile)
+    
 
 #------------------------------------------------------------------------------
 @follows(mkdir("salmon.dir"))
@@ -1384,8 +1382,8 @@ def getTranscript2GeneMap(outfile):
           "input_rna.dir/*.sra"),
          regex(".+/(\S+).(fastq.1.gz|fastq.gz|sra)"),
          add_inputs(buildSalmonIndex, getTranscript2GeneMap),
-         [r"salmon.dir/\1/genes.tsv",
-          r"salmon.dir/\1/tanscripts.tsv"])
+         [r"salmon.dir/\1/transcripts.tsv.gz",
+         r"salmon.dir/\1/genes.tsv.gz"])
 def runSalmon(infiles, outfiles):
     '''
     Computes read counts across transcripts and genes based on a fastq
@@ -1451,25 +1449,7 @@ def runSalmon(infiles, outfiles):
 def merge_rna_counts(infiles, outfiles):
     '''Merge counts from each sample into a single table'''
 
-    transcript_infiles = [x[0] for x in infiles]
-    gene_infiles = [x[1] for x in infiles]
-
-    transcript_outfile, gene_outfile = outfiles
-
-    def mergeinfiles(infiles, outfile):
-        final_df = pd.DataFrame()
-
-        for infile in infiles:
-            tmp_df = pd.read_table(infile, sep="\t", index_col=0)
-            final_df = final_df.merge(
-                tmp_df, how="outer",  left_index=True, right_index=True)
-
-        final_df = final_df.round()
-        final_df.sort_index(inplace=True)
-        final_df.to_csv(outfile, sep="\t", compression="gzip")
-
-    mergeinfiles(transcript_infiles, transcript_outfile)
-    mergeinfiles(gene_infiles, gene_outfile)
+    pipelineAtacseq.merge_counts(infiles, outfiles, submit=True)
 
 
 #------------------------------------------------------------------------------
@@ -1495,8 +1475,8 @@ def assembleWithStringTie(infiles, outfile):
 
 
 # ----------------------------------------------------------------------------
-@merge(assembleWithStringTie,
-        PARAMS["geneset"],
+@merge((assembleWithStringTie,
+        PARAMS["geneset"]),
        "geneset.dir/agg-agg-agg.gtf.gz")
 def mergeAllAssemblies(infiles, outfile):
     '''Merge the assemblies from each sample together into a single merged
@@ -1530,14 +1510,14 @@ def get_denovo_promoters(infile, outfile):
     filter out the one exon transcripts, and get a region 2kb uptream
     and 100bp downstream'''
 
-    contigs = os.path.join(os.path.dirnamep(__file__), "contigs.tsv")
+    contigs = os.path.join(os.path.dirname(__file__), "contigs.tsv")
     statement = '''cgat gff2bed
                            --bed12-from-transcripts
                             -I %(infile)s
                             -L %(outfile)s.log 
                     | awk '$10>1' 
-                    | bedtools flank -i - -l 2000 -s -g %(contigs)s
-                    | bedtools slop -r 100 -s -g %(contigs)s
+                    | bedtools flank -i - -l 2000 -r 0 -s -g %(contigs)s
+                    | bedtools slop -r 100 -l 0 -s -g %(contigs)s
                     | sort -k1,1 -k2,2n
                     | gzip > %(outfile)s '''
 
@@ -1553,13 +1533,13 @@ def get_reference_promoters(infile, outfile):
     that in contrast to the denovo transcripts processed above, we keep 1 exon
     transcripts.'''
 
-    contigs = os.path.join(os.path.dirnamep(__file__), "contigs.tsv")
+    contigs = os.path.join(os.path.dirname(__file__), "contigs.tsv")
     statement = '''cgat gff2bed
                            --bed12-from-transcripts
                             -I %(infile)s
                             -L %(outfile)s.log 
-                    | bedtools flank -i - -l 2000 -s -g %(contigs)s
-                    | bedtools slop -r 100 -s -g %(contigs)s
+                    | bedtools flank -i - -l 2000 -r 0 -s -g %(contigs)s
+                    | bedtools slop -r 100 -l 0 -s -g %(contigs)s
                     | sort -k1,1 -k2,2n
                     | gzip > %(outfile)s '''
 
@@ -1583,6 +1563,9 @@ def merge_promoters(infiles, outfile):
 
 @follows(merge_promoters,
          merge_rna_counts)
+def rna_preprocessing():
+    pass
+
 ##########################################################################################
 ##                   Targets          
 ##########################################################################################
