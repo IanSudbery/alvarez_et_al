@@ -72,7 +72,6 @@ input_matrix[column] <- lapply(input_matrix[column], as.character)
 first_col_name = input_matrix[1,1]
 
 
-
 # Read in the dataframe with the counts
 input_matrix <- as.matrix(read.table(counts_matrix_file,
                                      sep="\t",
@@ -98,7 +97,12 @@ if(!(group_by_col_id %in% colnames(coldata_df)))
   stop(paste("ERROR: the column", group_by_col_id, "doesn't exist in coldata"))
 }
 
+# Check the column content is the same
+if(!setequal(rownames(coldata_df), colnames(input_matrix))) {
+     stop("ERROR: Row names of coldata and counts data are not the same\ncounts_matrix colnames")
+   }
 
+coldata_df <- coldata_df[colnames(input_matrix),]
 
 # Get the data into DESeqDataSet format, Using design ~ 1 and overriding it later
 dds <- DESeqDataSetFromMatrix(countData = input_matrix,
@@ -128,7 +132,7 @@ counter_pos = 1
 
 # Substitute the replicate names by the new sample names ("runsCollapsed")
 for (row in colnames(assay(ddsColl))) {
-  new_colnames[counter_pos] = col_desc_df[(col_desc_df$rep_id == row), "runsCollapsed"]
+  new_colnames[counter_pos] = col_desc_df[(col_desc_df[[group_by_col_id]] == row), "runsCollapsed"]
   
   counter_pos = counter_pos + 1
   
@@ -154,7 +158,7 @@ colnames(output_df)[1] <- first_col_name
 
 
 # Output the count file
-write.table(output_df, gzfile(output_file)),
+write.table(output_df, gzfile(output_file),
             append = FALSE,
             quote = FALSE,
             sep = "\t",
@@ -165,8 +169,11 @@ write.table(output_df, gzfile(output_file)),
             col.names = TRUE)
 
 # Output the col_data file
-col_data_file = sub(".tsv.gz", ".col_data.tsv.gz", output_file)
-write.table(col_data_df, gzfile(paste0(output_file, ".colData.tsv.gz")),
+col_data_file = sub(".tsv.gz", ".col_data.tsv", output_file)
+colnames(col_desc_df)[ncol(col_desc_df)] <- "sample_name"
+col_desc_df <- col_desc_df[,c(ncol(col_desc_df), 1:(ncol(col_desc_df)-1))]
+
+write.table(col_desc_df, col_data_file,
             append = FALSE,
             quote = FALSE,
             sep = "\t",

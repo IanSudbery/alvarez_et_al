@@ -1224,7 +1224,7 @@ def group_tag_counts_per_peakset(infiles, outfile):
     Sample titles will be shortened. Note that they will have no "A" on the
     start'''
 
-    col_names = " ".join([re.match("tag_counts.dir/A(.+).bowtie2_vs_", infile).groups()[0]
+    col_names = " ".join([re.match("tag_counts.dir/(.+).bowtie2_vs_", infile).groups()[0]
                          for infile in infiles] )
     infiles = " ".join(infiles)
 
@@ -1268,7 +1268,7 @@ def collapse_tech_reps(infiles, outfile):
 
     script = os.path.join(os.path.dirname(__file__), "scripts/R_collapseReps.R")
     counts, coldata = infiles
-    statement = '''Rscript %(script)s %(counts)s %(coldata)s rep_id %(outfile)s'''
+    statement = '''Rscript %(script)s %(counts)s %(coldata)s biosample_id %(outfile)s'''
     P.run(statement)
 
 
@@ -1288,6 +1288,24 @@ def collapse_cd19(infiles, outfile):
     statement = '''Rscript %(script)s %(counts)s %(coldata)s donor_id %(outfile)s'''
     P.run(statement)
 
+#-----------------------------------------------------------------------------------------
+@follows(mkdir("DE.dir"))
+@subdivide(collapse_cd19,
+           regex("(.+)/(.+)_raw_tag_counts.donors_collapsed.tsv.gz"),
+           add_inputs(r"\1/\2_raw_tag_counts.donors_collapsed.col_data.tsv"),
+           [r"DE.dir/all_\2_atac_regions.tsv.gz",
+            r"DE.dir/sign_\2_atac_regions.tsv.gz"],
+            r"\2")
+def run_atac_de(infiles, outfiles, grouping):
+    '''Use DESeq to call differentially open regions for both pan and subgroup peaks.
+    Bit of a cludge because the two calling processes are quite different, and input
+    files to scripts are hard coded'''
+
+    script = os.path.join(os.path.dirname(__file__), "scripts/R_atac_%s_de.R" % grouping)
+    statement = '''Rscript %(script)s'''
+
+    job_memory="16G"
+    P.run(statement)
 
 ##########################################################################################
 # RNA Processing
