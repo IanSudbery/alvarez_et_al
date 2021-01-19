@@ -1,7 +1,7 @@
-# Pipeline and code for Alvarez-Benayas, Katsarou and Trasanidis et al #
+# Pipeline and code for Alvarez-Benayas, Katsarou and Trasanidis *et al* #
 
 ## Dependency installation ##
-Dependencies are listed in environment.yml. This can be used to build a conda environment. We recommend using mamba to do this, as it is significantly faster than conda.
+Dependencies are listed in `environment.yml`. This can be used to build a conda environment. We recommend using `mamba` to do this, as it is significantly faster than `conda`.
 
 ```
 $ mamba env create [-p PATH_TO_STORE_ENV|-n NAME_FOR_ENV] -f environment.yml
