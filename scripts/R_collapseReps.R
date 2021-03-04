@@ -99,11 +99,13 @@ if(!(group_by_col_id %in% colnames(coldata_df)))
 
 # Check the column content is the same
 if(!setequal(rownames(coldata_df), colnames(input_matrix))) {
-     stop("ERROR: Row names of coldata and counts data are not the same\ncounts_matrix colnames")
+     warning("Row names of coldata and counts data are not the same\ncounts_matrix colnames")
    }
 
 coldata_df <- coldata_df[colnames(input_matrix),]
-
+print(rownames(coldata_df))
+print("-----")
+print(colnames(input_matrix))
 # Get the data into DESeqDataSet format, Using design ~ 1 and overriding it later
 dds <- DESeqDataSetFromMatrix(countData = input_matrix,
                               colData = coldata_df,

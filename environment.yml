@@ -64,6 +64,7 @@ dependencies:
   - bioconductor-variantannotation=1.28.3=r351h14c3975_0
   - bioconductor-xvector=0.22.0=r351h14c3975_0
   - bioconductor-zlibbioc=1.28.0=r351h14c3975_0
+  - bioconductor-org.hs.eg.db=3.7.0
   - biopython=1.77=py37h8f50634_1
   - biothings_client=0.2.3=pyh3252c3a_0
   - bismark=0.23.0=0
@@ -522,7 +523,7 @@ dependencies:
   - ruffus=2.8.4=pyh864c0ab_1
   - s3transfer=0.3.3=py37hc8dfbb8_2
   - sailfish=0.9.0=1
-  - salmon=0.11.3=h86b0361_2
+  - salmon=0.7.2
   - samtools=1.9=h10a08f8_12
   - scikit-learn=0.24.0=py37h69acf81_0
   - scipy=1.5.3=py37h8911b10_0

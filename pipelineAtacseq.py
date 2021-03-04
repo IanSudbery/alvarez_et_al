@@ -900,6 +900,7 @@ def merge_counts(infiles, outfiles):
 
         final_df = final_df.round()
         final_df.sort_index(inplace=True)
+        final_df.columns = [re.sub("_RNA", "", x) for x in final_df.columns]
         final_df.to_csv(outfile, sep="\t", compression="gzip")
 
     mergeinfiles(transcript_infiles, transcript_outfile)

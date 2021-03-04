@@ -1,40 +1,40 @@
-ATAC.sample.code	RNA.sample.code	MM.ND	Subgroup	biosample_id	cd19	donor_id	atac_batch
-A17.5	RS_2.1	MM	UNKNOWN	rep1	other	2	pool_singleton
-A17.9	RS_2.3	MM	HD	rep2	other	3	pool_singleton
-A19.1	RS_1.2	MM	HD	rep3	other	4	pool19
-A19.2	RS_1.4	MM	CCND1	rep4	other	5	pool19
-A19.5	RS_1.7	MM	HD	rep5	other	6	pool19
-A19.6	RS_1.8	MM	UNKNOWN	rep6	other	7	pool19
-A19.8	RS_1.3	MM	MMSET	rep7	other	8	pool19
-A24.10	RS_1.10	MM	UNKNOWN	rep8	other	9	pool_singleton
-A24.11	RS_2.4	MM	HD	rep9	other	10	pool24_pool26
-A24.4	RS_3B.2	MM	HD	rep10	other	11	pool24
-A24.7	RS_1.5	MM	HD	rep11	other	12	pool24
-A24.8	RS_1.9	MM	HD	rep12	other	13	pool24_pool26
-A26.1	RS_3B.1	MM	HD	rep21	other	22	pool26
-A26.10B	RS_1.14	MM	MMSET	rep13	other	14	pool26
-A26.11	RS_1.15	MM	MAF	rep14	other	15	pool_singleton
-A26.12	RS_1.16	MM	MAF	rep15	other	16	pool26
-A26.13	RS_1.18	MM	HD	rep16	other	17	pool26
-A26.14	RS_1.19	MM	CCND1	rep17	other	18	pool_singleton
-A26.15B	RS_1.20	MM	HD	rep18	other	19	pool26
-A26.18	RS_1.22	ND	ND	rep19	plus	160617	pool26
-A26.19	RS_1.23	ND	ND	rep20	minus	160617	pool26
-A26.20	RS_1.22	ND	ND	rep19	plus	160617	pool26
-A26.6B	RS_1.11	MM	HD	rep22	other	24	pool26
-A26.8	RS_1.12	MM	CCND1	rep23	other	25	pool26
-A26.9B	RS_1.13	MM	HD	rep24	other	26	pool26
-A27.12	RS_1.17	MM	HD	rep25	other	27	pool27
-A27.18	RS_2.5	MM	UNKNOWN	rep26	other	28	pool27
-A27.19	RS_2.6	MM	MMSET	rep27	other	29	pool_singleton
-A27.20	RS_2.7	MM	UNKNOWN	rep28	other	30	pool27
-A27.21	RS_2.8	ND	ND	rep29	plus	271017	pool27
-A27.22	RS_2.9	ND	ND	rep30	minus	271017	pool27
-A28.13	RS_3B.3	MM	MMSET	rep31	other	33	pool_singleton
-A28.15	RS_3B.4	MM	CCND1	rep32	other	34	pool_singleton
-A28.7	NA	Cell_line	Cell_line	rep33	other	35	pool28
-A28c.14	RS_4.25	ND	ND	rep34	plus	230218	pool_singleton
-A28c.3	NA	Cell_line	Cell_line	rep35	other	37	pool28
-A28c.5	NA	Cell_line	Cell_line	rep36	other	38	pool28
-A28c.6	NA	Cell_line	Cell_line	rep37	other	39	pool28
-AJJN3.1	NA	Cell_line	Cell_line	rep38	other	40	pool28
+ATAC.sample.code	RNA.sample.code	MM.ND	Subgroup	biosample_id	cd19	donor_id	atac_batch	rna_batch
+A17.5	RS_2.1	MM	UNKNOWN	rep1	other	2	pool_singleton	batch2
+A17.9	RS_2.3	MM	HD	rep2	other	3	pool_singleton	batch2
+A19.1	RS_1.2	MM	HD	rep3	other	4	pool19	batch1
+A19.2	RS_1.4	MM	CCND1	rep4	other	5	pool19	batch1
+A19.5	RS_1.7	MM	HD	rep5	other	6	pool19	batch1
+A19.6	RS_1.8	MM	UNKNOWN	rep6	other	7	pool19	batch1
+A19.8	RS_1.3	MM	MMSET	rep7	other	8	pool19	batch1
+A24.10	RS_1.10	MM	UNKNOWN	rep8	other	9	pool_singleton	batch1
+A24.11	RS_2.4	MM	HD	rep9	other	10	pool24_pool26	batch2
+A24.4	RS_3B.2	MM	HD	rep10	other	11	pool24	batch3
+A24.7	RS_1.5	MM	HD	rep11	other	12	pool24	batch1
+A24.8	RS_1.9	MM	HD	rep12	other	13	pool24_pool26	batch1
+A26.1	RS_3B.1	MM	HD	rep21	other	22	pool26	batch3
+A26.10B	RS_1.14	MM	MMSET	rep13	other	14	pool26	batch1
+A26.11	RS_1.15	MM	MAF	rep14	other	15	pool_singleton	batch1
+A26.12	RS_1.16	MM	MAF	rep15	other	16	pool26	batch1
+A26.13	RS_1.18	MM	HD	rep16	other	17	pool26	batch1
+A26.14	RS_1.19	MM	CCND1	rep17	other	18	pool_singleton	batch1
+A26.15B	RS_1.20	MM	HD	rep18	other	19	pool26	batch1
+A26.18	RS_1.22	ND	ND	rep19	plus	160617	pool26	batch1
+A26.19	RS_1.23	ND	ND	rep20	minus	160617	pool26	batch1
+A26.20	RS_1.22	ND	ND	rep19	plus	160617	pool26	batch1
+A26.6B	RS_1.11	MM	HD	rep22	other	24	pool26	batch1
+A26.8	RS_1.12	MM	CCND1	rep23	other	25	pool26	batch1
+A26.9B	RS_1.13	MM	HD	rep24	other	26	pool26	batch1
+A27.12	RS_1.17	MM	HD	rep25	other	27	pool27	batch1
+A27.18	RS_2.5	MM	UNKNOWN	rep26	other	28	pool27	batch2
+A27.19	RS_2.6	MM	MMSET	rep27	other	29	pool_singleton	batch2
+A27.20	RS_2.7	MM	UNKNOWN	rep28	other	30	pool27	batch2
+A27.21	RS_2.8	ND	ND	rep29	plus	271017	pool27	batch2
+A27.22	RS_2.9	ND	ND	rep30	minus	271017	pool27	batch2
+A28.13	RS_3B.3	MM	MMSET	rep31	other	33	pool_singleton	batch3
+A28.15	RS_3B.4	MM	CCND1	rep32	other	34	pool_singleton	batch3
+A28.7	NA	Cell_line	Cell_line	rep33	other	35	pool28	batchCL
+A28c.14	RS_4.25	ND	ND	rep34	plus	230218	pool_singleton	batch1
+A28c.3	NA	Cell_line	Cell_line	rep35	other	37	pool28	batchCL
+A28c.5	NA	Cell_line	Cell_line	rep36	other	38	pool28	batchCL
+A28c.6	NA	Cell_line	Cell_line	rep37	other	39	pool28	batchCL
+AJJN3.1	NA	Cell_line	Cell_line	rep38	other	40	pool28	batchCL

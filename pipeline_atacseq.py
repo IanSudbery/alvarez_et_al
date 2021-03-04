@@ -1,4 +1,4 @@
-from ruffus import follows, transform, add_inputs, mkdir, regex, formatter, merge, subdivide, files, collate, suffix
+from ruffus import follows, transform, add_inputs, mkdir, regex, formatter, merge, subdivide, files, collate, suffix, inputs
 from ruffus.combinatorics import product
 #from ruffus.combinatorics import *
 
@@ -1293,8 +1293,7 @@ def collapse_cd19(infiles, outfile):
 @subdivide(collapse_cd19,
            regex("(.+)/(.+)_raw_tag_counts.donors_collapsed.tsv.gz"),
            add_inputs(r"\1/\2_raw_tag_counts.donors_collapsed.col_data.tsv"),
-           [r"DE.dir/all_\2_atac_regions.tsv.gz",
-            r"DE.dir/sign_\2_atac_regions.tsv.gz"],
+           r"DE.dir/all_\2_atac_regions.tsv.gz",
             r"\2")
 def run_atac_de(infiles, outfiles, grouping):
     '''Use DESeq to call differentially open regions for both pan and subgroup peaks.
@@ -1302,11 +1301,47 @@ def run_atac_de(infiles, outfiles, grouping):
     files to scripts are hard coded'''
 
     script = os.path.join(os.path.dirname(__file__), "scripts/R_atac_%s_de.R" % grouping)
-    statement = '''Rscript %(script)s'''
+    statement = '''Rscript %(script)s 2> %(outfiles)s.log'''
 
     job_memory="16G"
     P.run(statement)
 
+#-----------------------------------------------------------------------------------------
+@transform(run_atac_de,
+           regex("DE.dir/all_(.+)_atac_regions.tsv.gz"),
+           inputs(r"DE.dir/sign_\1_atac_regions.tsv.gz"),
+           r"DE.dir/sign_\1_atac_regions.bed.gz")
+def get_atac_de_bed(infile, outfile):
+    '''Convert the table coming out fo the DE calculation into a bed file. To do this the
+    id column is split into chr, start, end and all the stats columns are merged using #s
+    '''
+
+    outfile = P.snip(outfile, ".gz")
+    statement = '''
+    header=$(zcat %(infile)s 
+              | head -n 1 
+              | cut -f 2- 
+              | sed -e 's/\\t/#/g') &&
+
+    header=$(printf "chr\\tstart\tend\\t$header") &&
+
+    echo "$header" > %(outfile)s &&
+
+    paste <(zcat %(infile)s 
+             | tail -n +2 
+             | cut -f 1 
+             | awk 'BEGIN {FS =":"} {printf("%s\\t%s\\n", $1,$2)}' 
+             | awk 'BEGIN {FS ="-"} {printf("%s\\t%s\\n", $1,$2)}') 
+          <(zcat %(infile)s 
+             | tail -n +2 
+             | cut -f 2- 
+             | sed -e 's/\t/#/g') 
+        >> %(outfile)s &&
+
+    gzip %(outfile)s'''
+
+    P.run(statement)
+    
 ##########################################################################################
 # RNA Processing
 ##########################################################################################
@@ -1450,7 +1485,7 @@ def runSalmon(infiles, outfiles):
         annotations=index,
         job_threads=PARAMS["salmon_threads"],
         job_memory=PARAMS["salmon_memory"],
-        options="--writeUnmappedNames --gcBias",
+        options="--writeUnmappedNames --gcBias --useEM",
         bootstrap=0,
         libtype="A",
         kmer=31,
@@ -1462,12 +1497,65 @@ def runSalmon(infiles, outfiles):
 #-----------------------------------------------------------------------------
 @collate(runSalmon,
          regex("(\S+).dir/(\S+)/transcripts.tsv.gz"),
-         [r"\1.dir/transcripts.tsv.gz",
-          r"\1.dir/genes.tsv.gz"])
-def merge_rna_counts(infiles, outfiles):
+         r"\1.dir/genes.tsv.gz")
+def merge_rna_counts(infiles, outfile):
     '''Merge counts from each sample into a single table'''
 
-    pipelineAtacseq.merge_counts(infiles, outfiles, submit=True)
+    transcripts = re.sub("genes", "transcripts", outfile)
+    pipelineAtacseq.merge_counts(infiles, (transcripts, outfile), submit=True)
+
+
+#------------------------------------------------------------------------------
+@transform(merge_rna_counts,
+           regex("(.+/genes).tsv.gz"),
+           add_inputs(r"samples.tsv"),
+           r"\1.donors_collapsed.tsv.gz")
+def collapse_cd19_rna(infiles, outfile):
+    '''Some of the ND libraries were selected for CD19+ and some for CD19-. MOFA analysis
+    reveals little to no difference in these, and each were sequenced inthe same batch. 
+    These will be merged as doing so will remove a variable from the model. Also outputs
+    colldata '''
+
+    script = os.path.join(os.path.dirname(__file__), "scripts/R_collapseReps.R")
+    counts, coldata = infiles
+    statement = '''Rscript %(script)s %(counts)s %(coldata)s donor_id %(outfile)s'''
+    P.run(statement)
+
+#------------------------------------------------------------------------------
+@follows(mkdir("DE.dir"))
+@subdivide(collapse_cd19_rna,
+           regex("(.+/genes).donors_collapsed.tsv.gz"),
+           add_inputs(r"\1.donors_collapsed.col_data.tsv"),
+           [r"DE.dir/all_pan_rna.tsv.gz",
+            r"DE.dir/all_subtype_rna.tsv.gz"])
+def run_rna_de(infiles, outfiles):
+    '''Use DESeq to call differentially open regions for both pan and subgroup genes.
+    Bit of a cludge because the two calling processes are quite different, and input
+    files to scripts are hard coded'''
+
+    statements = list()
+    for grouping in ["pan", "subtype"]:
+        script = os.path.join(os.path.dirname(__file__), "scripts/R_rna_%s_de.R" % grouping)
+        statements.append('''Rscript %(script)s''' % locals())
+
+    job_memory="16G"
+    P.run(statements)
+
+#------------------------------------------------------------------------------
+@transform(run_rna_de,
+           regex("DE.dir/all_(pan|subtype)_rna.tsv.gz"),
+           inputs(r"DE.dir/sign_\1_rna.tsv.gz"),
+           r"DE.dir/sign_\1_rna_with_symbols.tsv.gz")
+def add_gene_symbols(infile, outfile):
+    '''Add gene symbols to the differentially expressed genes'''
+
+    script = os.path.join(os.path.dirname(__file__), "scripts/EnsemblTable2Symbols_Maintain_order_field.R")
+    statement=''' Rscript %(script)s
+                  %(infile)s
+                  0 TRUE FALSE
+                  %(outfile)s'''
+
+    P.run(statement)
 
 
 #------------------------------------------------------------------------------

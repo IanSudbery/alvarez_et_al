@@ -63,7 +63,7 @@ pdaj_threshold = 0.1
 counts_matrix_file = "tag_counts.dir/subtype_raw_tag_counts.donors_collapsed.tsv.gz"
 coldata_file = "tag_counts.dir/subtype_raw_tag_counts.donors_collapsed.col_data.tsv"
 output_df_all_details_file = "DE.dir/all_subtype_atac_regions.tsv.gz"
-
+output_df_sign_regions_file = "DE.dir/sign_subtype_atac_regions.tsv.gz"
 
 # Check all parameters are not empty
 if(counts_matrix_file == '' || is.null(counts_matrix_file)){
