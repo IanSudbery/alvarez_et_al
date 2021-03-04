@@ -48,9 +48,11 @@ done <$ChIPseq_table
 
 
 #5. Super-enhancer calling, example for H3K27ac analysis
-#1. First make Tag Directories for CHIP AND INPUT files you want to use#
+#a. First make Tag Directories for CHIP AND INPUT files you want to use#
 makeTagDirectory "MM1S_H3K27ac_ChIP/" "MM1S_H3K27ac.noall.sorted.bam"
 makeTagDirectory "MM1S_Input_ChIP/" "MM1S_Input.noall.sorted.bam"
+
+#b. Then perform super-enhancer analysis
 findPeaks "MM1S_H3K27ac_ChIP" -i MM1S_Input_ChIP -style super -o MM1S_H3K27ac_ChIP.SuperEnhancers.txt -typical MM1S_H3K27ac_ChIP.typical_enhancers.txt -L 0
 
 sed '/^#/ d' MM1S_H3K27ac_ChIP.SuperEnhancers.txt | awk '{printf("%s\t%s\t%s\t%s\t%s\t%s\n",$2,$3,$4,$1,".",$6)}' - > MM1S_H3K27ac_ChIP.SuperEnhancers.bed
