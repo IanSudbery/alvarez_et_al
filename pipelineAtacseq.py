@@ -905,3 +905,100 @@ def merge_counts(infiles, outfiles):
 
     mergeinfiles(transcript_infiles, transcript_outfile)
     mergeinfiles(gene_infiles, gene_outfile)
+
+
+@cluster_runnable
+def merge_atac_and_rna_de(atac_file, rna_file, outfile, logfile):
+    '''Take a table of differentially accessbile peaks (that have been
+    annotated with genes) and a table of differentially expressed genes,
+    and combine the two'''
+    
+    logf = IOTools.open_file(logfile, "w")
+
+    all_ATAC_RNA_interactions_table = pd.read_table(atac_file,
+                                                    header=0,
+                                                    delimiter="\t");
+
+    all_ATAC_RNA_interactions_table_nas = all_ATAC_RNA_interactions_table[
+        all_ATAC_RNA_interactions_table.isnull().any(axis=1)]
+
+    if (all_ATAC_RNA_interactions_table_nas.shape[0]):
+        logf.write("ATAC RNA interactions rows containing NA")
+
+    # Print the dimensions of the read table to make sure the reading is proper
+    logf.write("all_ATAC_RNA_interactions_table read: " + 
+                str(all_ATAC_RNA_interactions_table.shape))
+                                   
+    DE_RNA_table = pd.read_table(rna_file,
+                            header=0,
+                            delimiter="\t");
+
+
+    DE_RNA_table_nas = DE_RNA_table[DE_RNA_table.isnull().any(axis=1)]
+
+    if (DE_RNA_table_nas.shape[0]):
+        logf.write("DE RNA rows containing NA")
+
+    # Print the dimensions of the read table to make sure the reading is proper
+    logf.write("DE_RNA_table read: " +str(DE_RNA_table.shape))
+
+    # Rename columns with ATAC and RNA prefixes
+    ATAC_RNA_cols = all_ATAC_RNA_interactions_table.columns.tolist()
+
+    logf.write("Original ATAC_RNA table columns")
+    logf.write("\t".join(ATAC_RNA_cols))
+
+    for i in range(len(ATAC_RNA_cols)):
+        if((i>1) and (i<9)):
+            ATAC_RNA_cols[i] = "ATAC_" + ATAC_RNA_cols[i]
+
+    all_ATAC_RNA_interactions_table.columns = ATAC_RNA_cols
+
+    logf.write("Renamed columns")
+    logf.write("\t".join(ATAC_RNA_cols))
+
+    DE_RNA_cols = DE_RNA_table.columns.tolist()
+
+    logf.write("Original ATAC_RNA table columns")
+    logf.write("\t".join(DE_RNA_cols))
+
+    for i in range(len(DE_RNA_cols)):
+        if((i>0) and (i<8)):
+            DE_RNA_cols[i] = "RNA_" + DE_RNA_cols[i]
+
+    DE_RNA_table.columns = DE_RNA_cols
+
+    logf.write("Renamed columns")
+    logf.write("\t".join(DE_RNA_cols))
+
+    # Merge the RNA-seq details
+    merged_df = pd.merge(all_ATAC_RNA_interactions_table,
+                     DE_RNA_table,
+                     left_on=["gene_id"],
+                     right_on=["id"],
+                     how="inner");
+
+
+    merged_df_nas = merged_df[merged_df.isnull().any(axis=1)]
+
+    if (merged_df_nas.shape[0]):
+       logf.write("merged_df rows containing NA")
+
+    # Print the dimensions of the read table to make sure the reading is proper
+    logf.write("merged_df read: " +str(merged_df.shape))
+
+    # Drop the duplicated "id" column
+    merged_df.drop(["id"], axis=1, inplace=True);
+
+   # Output the table (NA -> "")
+    merged_df.to_csv(outfile,
+             sep="\t",
+             header=True,
+             compression="gzip",
+             mode="w",
+             index_label=None,
+             index=False,
+             na_rep="",
+             line_terminator="\n")
+
+    logf.close()

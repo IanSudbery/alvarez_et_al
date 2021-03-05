@@ -1319,29 +1319,32 @@ def get_atac_de_bed(infile, outfile):
     outfile = P.snip(outfile, ".gz")
     statement = '''
     header=$(zcat %(infile)s 
-              | head -n 1 
+              | awk 'NR==1'
               | cut -f 2- 
-              | sed -e 's/\\t/#/g') &&
+              | sed -e 's/\\t/#/g');
 
-    header=$(printf "chr\\tstart\tend\\t$header") &&
+    header=$(printf "chr\\tstart\\tend\\t$header");
 
-    echo "$header" > %(outfile)s &&
+    echo "$header" > %(outfile)s;
 
     paste <(zcat %(infile)s 
-             | tail -n +2 
+             | awk 'NR!=1'
              | cut -f 1 
-             | awk 'BEGIN {FS =":"} {printf("%s\\t%s\\n", $1,$2)}' 
-             | awk 'BEGIN {FS ="-"} {printf("%s\\t%s\\n", $1,$2)}') 
+             | awk 'BEGIN {FS =":"} {printf("%%s\\t%%s\\n", $1,$2)}' 
+             | awk 'BEGIN {FS ="-"} {printf("%%s\\t%%s\\n", $1,$2)}') 
           <(zcat %(infile)s 
-             | tail -n +2 
+             | awk 'NR!=1' 
              | cut -f 2- 
-             | sed -e 's/\t/#/g') 
-        >> %(outfile)s &&
+             | sed -e 's/\\t/#/g') 
+        >> %(outfile)s;
 
     gzip %(outfile)s'''
 
     P.run(statement)
-    
+
+#-----------------------------------------------------------------------------------------
+
+
 ##########################################################################################
 # RNA Processing
 ##########################################################################################
@@ -1671,6 +1674,102 @@ def merge_promoters(infiles, outfile):
          merge_rna_counts)
 def rna_preprocessing():
     pass
+
+##########################################################################################
+## Combined Analysis
+##########################################################################################
+@transform(get_atac_de_bed,
+           suffix(".bed.gz"),
+           add_inputs(merge_promoters),
+           ".no_tss.bed.gz")
+def filter_tss(infiles, outfile):
+    '''Filter out any peaks from the differentially accessible peaks that 
+    overlap with TSS regions, either from the reference annotation, or those
+    assembled from the RNA-seq'''
+
+    outfile = P.snip(outfile)
+    infile, tss = infiles
+
+    statement = '''
+    zcat %(infile)s | awk 'NR==1' > %(outfile)s &&
+
+    bedtools intersect -v 
+                       -a <(zcat %(infile)s | awk 'NR!=1')
+                       -b  %(tss)s
+        >> %(outfile)s &&
+
+    gzip -f %(outfile)s'''
+    P.run(statement)
+
+# ----------------------------------------------------------------------------
+@transform(PARAMS["geneset"],
+           formatter(),
+           "geneset.dir/1MB_gene_territory.bed.gz")
+def get_1mb_gene_territory(infile, outfile):
+    '''Get a 1MB region around each gene coding promoter (with 2kb upstream
+     and 100bp downstream of the TSS'''
+
+    contigs = os.path.join(os.path.dirname(__file__), "contigs.tsv")
+    statement ='''zcat %(infile)s
+                | grep 'gene_biotype "protein_coding"'
+                | cgat gtf2gtf -m merge-transcripts --with-utr -L %(outfile)s.log
+                | cgat gtf2gtf -m set-transcript-to-gene -L %(outfile)s.log
+                | cgat gff2bed --bed12-from-transcripts -L %(outfile)s.log 
+                | bedtools flank -i - -l 1002000 -r 0 -s -g %(contigs)s
+                | bedtools slop -r 1000100 -l 0 -s -g %(contigs)s
+                | sort -k1,1 -k2,2n
+                | gzip > %(outfile)s'''
+
+    P.run(statement)
+# ----------------------------------------------------------------------------
+@transform(filter_tss,
+           regex("DE.dir/sign_(.+)_atac.+.bed.gz"),
+           add_inputs(get_1mb_gene_territory),
+           r"DE.dir/sign_\1_atac_rna_interaction.tsv.gz")
+def intersect_atac_and_genes(infiles, outfile):
+    '''Annotate peaks with genes within 1MB. This will create a record for each
+    pair of gene and peak within 1MB'''
+
+    peaks, territories = infiles
+    outfile = P.snip(outfile, ".gz")
+
+    statement='''
+      header1=$(zcat %(peaks)s | awk 'NR==1') &&
+   
+      printf "$header1\\tgene_id\\n" 
+        | awk 'BEGIN { FS ="\\t";OFS=FS} {$1="peak_id";$2="";$3=""} {printf("%%s\\n", $0)}'
+        | cut --complement -f 2,3 
+        | awk 'BEGIN {FS ="\\t"} {printf("%%s\\t%%s\\t%%s\\n", $1,$3,$2)}' 
+        | sed -e 's/#/\\t/g'
+        > %(outfile)s &&
+
+      bedtools intersect -wo 
+                         -a <(zcat %(peaks)s | awk 'NR!=1')
+                         -b %(territories)s
+       | cut -f 1-4,8 
+       | awk 'BEGIN { FS ="\\t";OFS=FS} {$1=$1":"$2"-"$3;$2="";$3=""} {printf("%%s\\n", $0)}' 
+       | cut --complement -f 2,3 
+       | awk 'BEGIN {FS ="\\t"} {printf("%%s\\t%%s\\t%%s\\n", $1,$3,$2)}' 
+       | sed -e 's/#/\\t/g' 
+      >> %(outfile)s &&
+
+      gzip %(outfile)s'''
+
+    P.run(statement)
+
+@follows(add_gene_symbols)
+@transform(intersect_atac_and_genes,
+           regex("DE.dir/sign_(.+)_atac.+"),
+           add_inputs(r"DE.dir/sign_\1_rna_with_symbols.tsv.gz"),
+           r"DE.dir/sign_\1_combined_de_atac_rna.tsv.gz")       
+def filter_to_de_genes(infiles, outfile):
+    '''Combine the information about de genes with the information about DA
+    peaks from the above function.'''
+
+    peaks, genes = infiles
+    logfile = outfile + ".log"
+    pipelineAtacseq.merge_atac_and_rna_de(peaks, genes, outfile, logfile,
+                                          submit=True)  
 
 ##########################################################################################
 ##                   Targets          
