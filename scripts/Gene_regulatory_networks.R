@@ -54,3 +54,7 @@ annotatedMMSET_20kb<-annotatedMMSET[(annotatedMMSET$distancetoFeature <20000) & 
 write.table(annotatedMMSET_20kb,file="AssignmentMMSET_20kb.txt", sep="\t")
 annotatedMMSET_20kb_ValidTFs <- annotatedMMSET_20kb[annotatedMMSET_20kb$id %in% as.character(Res1_TFs$MMSET),]
 write.table(annotatedMMSET_20kb_ValidTFs,file="AssignmentMMSET_20kb_ValidTFs.txt", sep="\t")
+
+# Load the output .txt file to Cytoscape3.3 for networks visualization and graph theory statistical analysis.
+                        
+                      
