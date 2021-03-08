@@ -1,0 +1,110 @@
+library(ChIPpeakAnno)
+setwd("J:/MM_PRIMARY_PROJECT/Analysis_II/Footrprinting_analysis/Wellington/Networks/Original")
+
+#granges function
+#' BED to GRanges
+#'
+#' This function loads a BED-like file and stores it as a GRanges object.
+#' The tab-delimited file must be ordered as 'chr', 'start', 'end', 'id', 'score', 'strand'.
+#' The minimal BED file must have the 'chr', 'start', 'end' columns.
+#' Any columns after the strand column are ignored.
+#'
+#' @param file Location of your file
+#' @keywords BED GRanges
+#' @export
+#' @examples
+#' bed_to_granges('my_bed_file.bed')
+ 
+bed_to_granges <- function(file){
+   df <- read.table(file,
+                    header=F,
+                    stringsAsFactors=F)
+ 
+   if(length(df) > 6){
+      df <- df[,-c(7:length(df))]
+   }
+ 
+   if(length(df)<3){
+      stop("File has less than 3 columns")
+   }
+ 
+   header <- c('chr','start','end','id','score','strand')
+   names(df) <- header[1:length(names(df))]
+ 
+   if('strand' %in% colnames(df)){
+      df$strand <- gsub(pattern="[^+-]+", replacement = '*', x = df$strand)
+   }
+ 
+   library("GenomicRanges")
+ 
+   if(length(df)==3){
+      gr <- with(df, GRanges(chr, IRanges(start, end)))
+   } else if (length(df)==4){
+      gr <- with(df, GRanges(chr, IRanges(start, end), id=id))
+   } else if (length(df)==5){
+      gr <- with(df, GRanges(chr, IRanges(start, end), id=id, score=score))
+   } else if (length(df)==6){
+      gr <- with(df, GRanges(chr, IRanges(start, end), id=id, score=score, strand=strand))
+   }
+   return(gr) }
+   
+IDs_to_names<-read.table("IDs_to_TF_names.txt")
+TFs_ranges<-bed_to_granges("TF_genes_loci.bed")
+Res1_TFs<-read.table("R1_Originals_MAX_express_TFs.txt", header=TRUE)
+
+annotatedNDs_20kb<-annotatedNDs[(annotatedNDs$distancetoFeature <20000) & (annotatedNDs$distancetoFeature >-20000)]
+write.table(annotatedNDs_100kb,file="AssignmentNDs.txt", sep="\t")
+
+
+annotatedHD_20kb_ValidTFs <- annotatedHD_20kb[annotatedHD_20kb$id %in% Res1_TFs$HD,]
+write.table(annotatedHD_20kb_ValidTFs,file="AssignmentHD_20kb_ValidTFs.txt", sep="\t")
+
+res1_converted <- apply(Res1_TFs, 2, function(x) sub("^(.+)\\.txt", "\\1", x))
+
+### FOR MAF Samples
+MAF_ranges<-bed_to_granges("ALL_MAF_FTs_sorted.bed")
+annotatedMAF<-annotatePeakInBatch(MAF_ranges, AnnotationData=TFs_ranges)
+annotatedMAF_20kb<-annotatedMAF[(annotatedMAF$distancetoFeature <20000) & (annotatedMAF$distancetoFeature >-20000)]
+write.table(annotatedMAF_20kb,file="AssignmentMAF_20kb.txt", sep="\t")
+annotatedMAF_20kb_ValidTFs <- subset(annotatedMAF_20kb,annotatedMAF_20kb$id %in% as.character(Res1_TFs$MAF))
+write.table(annotatedMAF_20kb_ValidTFs,file="AssignmentMAF_20kb_ValidTFs.txt", sep="\t")
+
+
+### FOR CCND1 Samples
+CCND1_ranges<-bed_to_granges("ALL_CCND1_FTs_sorted.bed")
+annotatedCCND1<-annotatePeakInBatch(CCND1_ranges, AnnotationData=TFs_ranges)
+annotatedCCND1_20kb<-annotatedCCND1[(annotatedCCND1$distancetoFeature <20000) & (annotatedCCND1$distancetoFeature >-20000)]
+write.table(annotatedCCND1_20kb,file="AssignmentCCND1_20kb.txt", sep="\t")
+annotatedCCND1_20kb_ValidTFs <- annotatedCCND1_20kb[annotatedCCND1_20kb$id %in% as.character(Res1_TFs$CCND1),]
+write.table(annotatedCCND1_20kb_ValidTFs,file="AssignmentCCND1_20kb_ValidTFs.txt", sep="\t")
+
+
+
+### FOR MMSET Samples
+MMSET_ranges<-bed_to_granges("ALL_FTs_MMSET_sorted.bed")
+annotatedMMSET<-annotatePeakInBatch(MMSET_ranges, AnnotationData=TFs_ranges)
+annotatedMMSET_20kb<-annotatedMMSET[(annotatedMMSET$distancetoFeature <20000) & (annotatedMMSET$distancetoFeature >-20000)]
+write.table(annotatedMMSET_20kb,file="AssignmentMMSET_20kb.txt", sep="\t")
+annotatedMMSET_20kb_ValidTFs <- annotatedMMSET_20kb[annotatedMMSET_20kb$id %in% as.character(Res1_TFs$MMSET),]
+write.table(annotatedMMSET_20kb_ValidTFs,file="AssignmentMMSET_20kb_ValidTFs.txt", sep="\t")
+
+
+
+### FOR ND Samples
+ND_ranges<-bed_to_granges("ALL_NDs_FTs_sorted.bed")
+annotatedND<-annotatePeakInBatch(ND_ranges, AnnotationData=TFs_ranges)
+annotatedND_20kb<-annotatedND[(annotatedND$distancetoFeature <20000) & (annotatedND$distancetoFeature >-20000)]
+write.table(annotatedND_20kb,file="AssignmentND_20kb.txt", sep="\t")
+annotatedND_20kb_ValidTFs <- annotatedND_20kb[annotatedND_20kb$id %in% as.character(Res1_TFs$ND),]
+write.table(annotatedND_20kb_ValidTFs,file="AssignmentND_20kb_ValidTFs.txt", sep="\t")
+
+
+
+### FOR HD Samples
+HD_ranges<-bed_to_granges("All_HD_FTs_sorted.bed")
+annotatedHD<-annotatePeakInBatch(HD_ranges, AnnotationData=TFs_ranges)
+annotatedHD_20kb<-annotatedHD[(annotatedHD$distancetoFeature <20000) & (annotatedHD$distancetoFeature >-20000)]
+write.table(annotatedHD_20kb,file="AssignmentHD_20kb.txt", sep="\t")
+annotatedHD_20kb_ValidTFs <- annotatedHD_20kb[annotatedHD_20kb$id %in% as.character(Res1_TFs$HD),]
+write.table(annotatedHD_20kb_ValidTFs,file="AssignmentHD_20kb_ValidTFs.txt", sep="\t")
+
