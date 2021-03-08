@@ -1,6 +1,17 @@
-
+#!/bin/bash
 ########## ChIPseq analysis script ##########
 
+#1. Dependencies 
+# Python 2.7.4
+# bowtie2 v2.4 -> conda install bowtie2
+# picard tools-> install from https://broadinstitute.github.io/picard/
+# samtools -> conda install samtools
+# deeptools -> pip install deeptools
+# macs2 -> pip install MACS2
+# homer4.9 tools -> install from http://homer.ucsd.edu/homer/download.html
+# pybedtools -> pip install pybedtools
+
+#2. Main scripts
 #enter fastq files directory
 export fastq_files = $fastq_files_directory
 export genome_dir = $bowtie_GRCh38_genome_directory
@@ -66,10 +77,34 @@ annotatePeaks.pl $file hg38 > outputfile.txt
 
 
 ####### Footprinting analysis #######
-#for each subgroup_merged files, $bedfile and $bamfile do
+#Example for construction of MMSET network. 
+export bedfile=$merged_peaks_bedfile
+export $bamfile=$merged_reads_bamfile
 wellington_footprints.py $bedfile $bamfile $outputfolder -fdr 0.05 -fdrlimit -10 -A
-awk $5< -10 $$outputfolder/*"-10fdr".bed | awk '{printf("%s\t%s\t%s\t%s\t%s\n",$1,$2,$3,$4":"$1":"$2":"$3":"$5,$5)}' > output_reformatted
+awk $5< "-10" $$outputfolder/*"-10fdr".bed | awk '{printf("%s\t%s\t%s\t%s\t%s\n",$1,$2,$3,$4":"$1":"$2":"$3":"$5,$5)}' > MMSET_FT_reformatted.bed
 
+#obtain TF motif occurances on footprints
+export motif_database=HOCOMOCOv11_full_HUMAN_mono_homer_format_0.0001.motif
+perl findMotifsGenome.pl MMSET_FT_reformatted.bed hg38 $outputfolder -size given -mask -find $motif_database > MMSET_FT_motif.txt
+cut -f1,6 MMSET_FT_motif.txt | sed -e '1d' | awk -F":" '$1=$1' OFS="\t" - | awk -F"-" '$1=$1' OFS="\t" - | awk '{printf("%s\t%s\t%s\t%s\t%s\n",$1,$2,$3,"'$textname'",$4)}' -  > MMSET_FT_motif.bed
+
+#obtain TF motif occurances on peaks (background)
+export motif_database=HOCOMOCOv11_full_HUMAN_mono_homer_format_0.0001.motif
+perl findMotifsGenome.pl $bedfile hg38 $outputfolder -size given -mask -find $motif_database > MMSET_peaks_motif.txt
+cut -f1,6 MMSET_peaks_motif.txt | sed -e '1d' | awk -F":" '$1=$1' OFS="\t" - | awk -F"-" '$1=$1' OFS="\t" - | awk '{printf("%s\t%s\t%s\t%s\t%s\n",$1,$2,$3,"'$textname'",$4)}' -  > MMSET_peaks_motif.bed
+
+#calculate scores
+cut -f1  MMSET_peaks_motif.bed | sort - | uniq -c - > MMSET_TFs.txt
+while read TF in MMSET_TFs.txt; do
+echo $TF >>Stats.txt
+echo "No. of occurances on FTs"
+grep $TF MMSET_FT_motif.bed| wc -l - >>Stats.txt
+echo "No. of occurances on peaks"
+grep $TF MMSET_peaks_motif.bed| wc -l - >>Stats.txt
+done
+
+## Construct Gene Regulatory Networks per subgroup
+# Use the GRN_script.R  
 
 ######## Differential footprinting analysis ########
 #comparative analysis for HD_high vs HD_low 
