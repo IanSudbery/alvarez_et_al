@@ -87,6 +87,7 @@ awk $5< "-10" $$outputfolder/*"-10fdr".bed | awk '{printf("%s\t%s\t%s\t%s\t%s\n"
 export motif_database=HOCOMOCOv11_full_HUMAN_mono_homer_format_0.0001.motif
 perl findMotifsGenome.pl MMSET_FT_reformatted.bed hg38 $outputfolder -size given -mask -find $motif_database > MMSET_FT_motif.txt
 cut -f1,6 MMSET_FT_motif.txt | sed -e '1d' | awk -F":" '$1=$1' OFS="\t" - | awk -F"-" '$1=$1' OFS="\t" - | awk '{printf("%s\t%s\t%s\t%s\t%s\n",$1,$2,$3,"'$textname'",$4)}' -  > MMSET_FT_motif.bed
+bedtools sort MMSET_FT_motif.bed >ALL_FTs_MMSET_sorted.bed
 
 #obtain TF motif occurances on peaks (background)
 export motif_database=HOCOMOCOv11_full_HUMAN_mono_homer_format_0.0001.motif
