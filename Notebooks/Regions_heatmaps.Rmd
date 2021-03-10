@@ -1,0 +1,108 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(readxl)
+regions <- read.delim("../data/new_subgroup_MM_vs_PC_DE_ATAC_DE_RNA_1Mb.tsv.gz")
+rlog_values <- read.delim("../data/subgroup_atac_rlog.tsv.gz", stringsAsFactors = FALSE)
+sig_rlogs <- select(regions, chr, start, end) %>%
+  inner_join(rlog_values)
+
+sample_table <- read.delim("../data/subgroup_atac_coldata.tsv.gz", stringsAsFactors=F, row.names = 1)
+sample_table$sample_id <- rownames(sample_table)
+rownames(sample_table) <- NULL
+PC_annotation <- sample_table[sample_table$cd19 != "other",]
+PC_annotation <- PC_annotation %>% 
+  mutate(sample_id=sub(",", ".", sample_id),
+         cd19=sub("minus", "CD19- NPC", cd19),
+         cd19=sub("plus", "CD19+ NPC", cd19))
+
+sample_anno <- data.frame(sample = colnames(sig_rlogs[-c(1,2,3)]) ) %>%
+  extract(sample, into = c("subtype", "sample"), "(.+)_([0-9]+.?\\.[0-9]+.*)") %>%
+  mutate(sample = sub(",",".",sample),
+         subtype = sub("MM_OTHER", "UNKNOWN", subtype))
+rownames(sample_anno) <- sample_anno$sample
+sample_anno[PC_annotation$sample_id,]$subtype <- PC_annotation$cd19
+cbbPalette =  c("CD19+ NPC"="#000000", "MAF"="#E69F00", "CCND1"="#56B4E9", "MMSET"="#009E73", "#F0E442", 
+                "CD19- NPC"="grey40", "HD"="#0072B2", "#D55E00", "UNKNOWN"="#CC79A7", "0"="white")
+```
+
+```{r}
+sig_matrix = regions[,grepl("ATAC_DE", colnames(regions))]
+colnames(sig_matrix) <- sub("ATAC_DE_", "", colnames(sig_matrix))
+colnames(sig_matrix) <- sub("_vs_ND", "", colnames(sig_matrix))
+#colnames(sig_matrix) <- sub("HD", "HY", colnames(sig_matrix))
+sig_matrix <- sig_matrix[,c("MAF", "MMSET", "CCND1", "HD")]
+for (subtype in colnames(sig_matrix)) {
+  sig_matrix[,subtype][sig_matrix[,subtype] != 1] <- "0"
+  sig_matrix[,subtype][sig_matrix[,subtype] == 1] <- subtype
+
+}
+
+lfc_matrix <- regions[,grepl("ATAC_log2FoldChange", colnames(regions))]
+colnames(lfc_matrix) <- sub("ATAC_log2FoldChange_", "", colnames(lfc_matrix))
+colnames(lfc_matrix) <- sub("_vs_ND", "",  colnames(lfc_matrix))
+lfc_matrix <- as.matrix(lfc_matrix)
+```
+
+```{r}
+library(ComplexHeatmap)
+library(gplots)
+mat <- as.matrix(sig_rlogs[,-c(1,2,3)])
+col_hust <- hclust(as.dist(1-cor(mat)), method="average")
+#row_hclust <- hclust(as.dist(1-cor(t(mat))), method="average")
+row_hclust <- hclust(dist(sig_matrix != "0"), method="average")
+```
+
+```{r, fig.width=4, fig.height=2.5}
+library(circlize)
+col_fun = colorRamp2(c(-3.5, 0, 3.5), c("blue", "white", "red"))
+column_ha = HeatmapAnnotation(Subtype=sample_anno$subtype, col=list(Subtype=cbbPalette), annotation_name_gp = gpar(fontsize=8), 
+                              show_legend=FALSE,
+                              show_annotation_name = FALSE,
+                              annotation_legend_param = list(labels_gp=gpar(fontsize=8), title_gp=gpar(fontsize=8)))
+#png("../Figures/ATAC_heatmap.png", width=6, height=4, units = "in",  res=600)
+regions_heat <- Heatmap(t(scale(t(mat))),
+  #                      col = col_fun,
+        name="ATAC\nsignal",
+        cluster_rows = row_hclust,
+        cluster_columns = col_hust,
+        row_dend_reorder=FALSE,
+        column_dend_reorder=FALSE,
+        show_row_dend = FALSE,
+        show_column_names = FALSE,
+        top_annotation = column_ha,
+        heatmap_legend_param= list(labels_gp = gpar(fontsize=8), title_gp=gpar(fontsize=8)))
+#dev.off()
+```
+
+```{r, fig.height=2.6, fig.width=4}
+
+sig_heat <- Heatmap(as.matrix(sig_matrix),
+                    col=cbbPalette,
+                    cluster_columns=FALSE,
+                    show_heatmap_legend = FALSE,
+                    column_names_side = "top",
+                    column_names_gp = gpar(fontsize=8))
+lfc_heat <- Heatmap(lfc_matrix,
+                    col=col_fun,
+                    cluster_columns=FALSE,
+                    show_heatmap_legend = FALSE,
+                    column_names_gp = gpar(fontsize=2))
+png("../Figures/ATAC_heatmap.png", width=4, height=2.7, units = "in",  res=600)
+regions_heat + sig_heat # + lfc_heat
+dev.off()
+```
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.

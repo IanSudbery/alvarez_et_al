@@ -1,0 +1,38 @@
+---
+title: "Projecting Jin et al onto MOFA."
+output: html_notebook
+---
+
+The aim of this notebook is to test how well the Jin et al data projects on the the MOFA axes derviced from our own work. 
+
+The steps in this process are:
+
+1. Procss the Jin et al data using the same pipelines with which we processed our own data. 
+2. Batch correct the Jin et al data to match our data, while leaving our data unchanged
+3. Munge the data into the correct single matrix for MOFA
+4. Calculate the missing factor x sample matrix. 
+
+MOFA works by finding the matricies n x f matrix Z and f x m matrix W such that $Z \dot W = Y$ where n is the number of samples, m is the number of features, f is the number of factors and Y is the n x m matrix of assay results for the m features of n samples. 
+
+To project new samples into factor space, therefore, one must find Z' such that $W \dot Z' = Y'$ where Z' and Y' are the factor matrix and assay data for the new samples. 
+
+This can be found by computeing $Z' = Y \dot W^-1$, which relies on being able to compute the inverse of the weightings matrix W. 
+
+This will only work if the weight matrix is invertable. Need to check this:
+
+```{r}
+library(MOFA)
+library(purrr)
+mofa <- loadModel("/shared/sudlab1/General/projects/PC_MM_Atac_seq/ians/MOFA/MOFA.hdf5")
+W <- reduce(getWeights(mofa), rbind)
+Y <- read.delim("../MOFA/rlog_batch_correct_read_counts_in_cons_peaks_no_TSS.tsv.gz")
+
+Z <- getFactors(mofa)
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.

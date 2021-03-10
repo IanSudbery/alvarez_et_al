@@ -1,0 +1,198 @@
+---
+title: "ATAC and chromHMM figure for CLL"
+output: html_notebook
+---
+
+This is the last supplementary figure of the paper, and shows the CNND2 area for CLL. It will contain averaged ATAC seq, chromHMM detail and HiC.
+
+The first job is the match the colours to the nearest state. Lets have a look at what the 
+```{r}
+our_col = list("black",
+                      "gray",
+                      "white",
+                      "pink",
+                      "red",
+                      "darkorange",
+                      "mediumspringgreen",
+                      "yellow",
+                      "green",
+                      "lightskyblue",
+                      "midnightblue",
+                      "dodgerblue")
+ours_to_theirs = data.frame(ours=c(12,11,1,10,9,8,7,5,6,4,2,3),
+                            theirs=c("E1","E3","E4","E2", "E6", "E5", "E7", "E9", "E8", "E10", "E12", "E11"),
+                            their_label=c("Active Promoter"))
+
+ours_to_theirs = ours_to_theirs[order(ours_to_theirs$ours),]
+state_colours <- setNames(our_col, ours_to_theirs$theirs)
+ours_to_theirs
+```
+
+Next a function to load in all the state tracks and their annotation
+```{r}
+library(dplyr)
+library(GenomicRanges)
+library(Gviz)
+library(rtracklayer)
+library(tidyr)
+developmental_order = data.frame(type_code=c("NBCT", "NBCB", "GCBC", "csMBC", "PCT", "CLL"),
+                                 type_order=c(1,2,3,4,5,6),
+                                 stringsAsFactors = FALSE)
+
+w = GRanges(seqnames = c("chr12"), IRanges(start=3500000, end=4500000))
+chromHMM_sample <- read.delim("../data/CLL/chromHMM/Labels_Samples.txt", sep="=",
+                              stringsAsFactors = FALSE,
+                              header = FALSE,
+                              col.names=c("Sample", "Cell_Type")) %>%
+  mutate_all(funs(trimws(.))) %>%
+  mutate(Cell_Type=gsub(".", " ", Cell_Type, fixed=T)) %>%
+  extract(Sample, regex="([A-Za-z]+)[0-9]+", into=c("type_code"),remove = FALSE) %>%
+  inner_join(developmental_order) %>%
+  arrange(type_order)
+
+for (i in length(chromHMM_sample$Cell_Type):2) {
+  if (chromHMM_sample$Cell_Type[i] == chromHMM_sample$Cell_Type[i-1]) {
+    chromHMM_sample$Cell_Type[i] <- ""
+  } 
+}
+get_track <- function(x) {
+  samplen = x["Sample"]
+  filen = paste0("../data/CLL/chromHMM/",samplen,"_12_segments.bed")
+  print(filen)
+  tname = x["Cell_Type"]
+  ranges = import(filen, which=w)
+  atrack = AnnotationTrack(ranges, name=tname,
+                               feature=ranges$name,
+                               stacking="dense",
+                               col=NULL,
+                           groups=tname)
+  displayPars(atrack) <- state_colours
+  return (atrack)
+}
+
+chromhmm_tracks <- apply(chromHMM_sample, 1, get_track)
+```
+
+Lets plot this and see what it looks like:
+
+```{r}
+library(EnsDb.Hsapiens.v86)
+seqlevelsStyle(EnsDb.Hsapiens.v86) <- "UCSC"
+genes_track <- GeneRegionTrack(getGeneRegionTrackForGviz(EnsDb.Hsapiens.v86, chr="chr12",
+                                                         start=4004176, end=4400000),
+                               transcriptAnnotation="symbol", 
+                               collapseTranscripts="meta", name=NULL, fontsize.group=8,
+                               cex.group=1,
+                               fill="grey20",
+                               col="grey20")
+plotTracks(c(genes_track,
+                chromhmm_tracks,
+                GenomeAxisTrack()),
+           chromosome="chr12", from=4074176, to=4289000, 
+           background.title="white", col.title="black", fontcolor.title="black",
+           cex.title=1,
+           showAxis=FALSE, 
+           fontface.title=1,
+           fontsize=9,
+           rotation.title=0)
+```
+
+Now to add the HiC
+```{r}
+source("make_granges_from_HiC.R")
+hic_granges <- make_granges_from_hic(contig="chr12",
+                                     start=4004176,
+                                     end=4400000,
+                                     anchor = 4273761, 
+                                     resolution = 5,
+                                     base_path = "../data/HiC",
+                                     path_to_liftOver = c("/shared/sudlab1/General/mirror/ucsc/hg38/hg38ToHg19.over.chain",
+                                                          "/shared/sudlab1/General/mirror/ucsc/hg19/hg19ToHg38.over.chain"))
+hic_track = DataTrack(hic_granges, data="count", name="HiC", type="polygon", col.mountain="grey75", fill.mountain=c("grey75", "grey75"),
+                      ylim=c(0,400))
+
+```
+
+
+```{r, fig.width=7, fig.height=6}
+h = c(3,3,rep(1, length(chromhmm_tracks)),2)
+plotTracks(c(hic_track,
+             genes_track,
+                chromhmm_tracks,
+                GenomeAxisTrack()),
+           chromosome="chr12", from=4074176, to=4289000, 
+           background.title="white", col.title="black", fontcolor.title="black",
+           cex.title=1,
+           showAxis=FALSE, 
+           fontface.title=1,
+           fontsize=9,
+           rotation.title=0,
+           sizes=h)
+
+```
+
+Finally we need to add the ATAC peaks. I've downloaded the following ATAC samples:
+
+```{r}
+read.delim("../data/CLL/atac_samples.txt", header=FALSE)
+
+```
+
+Need the check why these samples. 
+
+Anyway, have averaged them using bigWigMerge and then using awk to divide by number of samples. Now to load them:
+
+```{r, fig.width=7, fig.height=8}
+tracks = list()
+heights = c()
+for (i in 1:dim(chromHMM_sample)){
+  if (chromHMM_sample$Cell_Type[i] != "") {
+    tracks = c(tracks, DataTrack(paste0("../data/CLL/", chromHMM_sample$type_code[i], ".bw"),
+                                 name="", type="h", ylim=c(0,160)))
+    heights=c(heights, 2)
+  }
+  tracks = c(tracks, chromhmm_tracks[[i]])
+  heights = c(heights, 1)
+}
+heights = c(3,3,heights,2)
+plotTracks(c(hic_track,
+             genes_track,
+             tracks,
+             GenomeAxisTrack()),
+           chromosome="chr12", from=4074176, to=4289000, 
+           background.title="white", col.title="black", fontcolor.title="black",
+           cex.title=1,
+           showAxis=FALSE, 
+           fontface.title=1,
+           fontsize=9,
+           rotation.title=0,
+           sizes=heights)
+
+
+```
+
+Looking good! Lets output that
+
+```{r}
+pdf("../Figures/FIgureS5a.pdf", height=8, width=7, useDingbats = FALSE)
+plotTracks(c(hic_track,
+             genes_track,
+             tracks,
+             GenomeAxisTrack()),
+           chromosome="chr12", from=4074176, to=4289000, 
+           background.title="white", col.title="black", fontcolor.title="black",
+           cex.title=1,
+           showAxis=FALSE, 
+           fontface.title=1,
+           fontsize=9,
+           rotation.title=0,
+           sizes=heights)
+dev.off()
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.

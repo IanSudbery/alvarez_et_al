@@ -1,0 +1,150 @@
+---
+title: 'Clustering our primary and CL samples and replotting heatmap. '
+output:
+  html_document:
+    df_print: paged
+---
+
+I will use the data where Jaime has already removed the batch effects. The script he has pointed me to is: `/shared/sudlab1/General/projects/PC_MM_Atac_seq/ians/Code/ATAC_clustering_MM_subgroup_DA_reg_enh_our_primary_rlog_batch_corr_acc_subg_with_jin_et_al_samples_rlog_batch_corr_not_acc_subg_12_08_2020.R`. 
+
+Start my reading in the rlogs
+
+```{r}
+# Data originally in /fastdata/mbp15ja/jin_et_al_primary_samples_ATAC_clustering_MM_subgroup_vs_PC_cons_peaks_07_08_2020/rlog_batch_correct_read_counts_in_cons_peaks_jin_et_al_2018_and_my_study_jin_et_al_not_acc_condition.tsv.gz
+# Copied to /shared/sudlab1/General/projects/PC_MM_Atac_seq/ians/data/rlog_batch_correct_read_counts_in_cons_peaks_jin_et_al_2018_and_my_study_jin_et_al_not_acc_condition.tsv.gz
+corrected_rlog_data <- read.delim("../data/rlog_batch_correct_read_counts_in_cons_peaks_jin_et_al_2018_and_my_study_jin_et_al_not_acc_condition.tsv.gz")
+
+```
+
+Get the regions we want to consider:
+
+```{r}
+library(dplyr)
+regions <- read.delim("../data/new_subgroup_MM_vs_PC_DE_ATAC_DE_RNA_1Mb.tsv.gz", stringsAsFactors = FALSE) %>%
+  mutate(region_id = paste0(chr,":",start,"-",end))
+
+```
+
+Now subset the rlogs so that it only has the signifciant regions of interest
+
+```{r}
+sig_rlogs <- regions %>%
+  select(region_id) %>%
+  inner_join(corrected_rlog_data, by = c("region_id" = "id"))
+
+sig_rlogs <- corrected_rlog_data %>%
+  filter(id %in% regions$region_id) %>%
+  arrange(id)
+```
+
+The next step is the column data, which is stored in a file in the temporary directory. 
+
+```{r}
+
+col_data <- read.delim("../data/coldata_ATAC_yin_our_primary.tsv.gz",
+                       stringsAsFactors = FALSE)  %>%
+  mutate(X=ifelse(grepl("^[0-9]", X), paste0("X",X), X)) %>% 
+  mutate(X= gsub(",", ".", X, fixed=TRUE)) %>%
+  mutate(study = ifelse(batch == "batch_1", "This study", "Jin et al"))
+
+```
+
+Now I need to cluster the columns of the rlog matrix
+
+
+```{r}
+
+mat <- as.matrix(sig_rlogs[,-1])
+col_hust <- hclust(as.dist(1-cor(mat)), method="ward.D2")
+
+row_hclust <- hclust(as.dist(1-cor(t(mat))), method="ward.D2")
+```
+
+Now plot the Rlog heatmap. 
+
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+cbbPalette =  c("ND"="#000000", "MAF"="#E69F00", "CCND1"="#56B4E9", "MMSET"="#009E73", "#F0E442", 
+                "CD19- NPC"="grey40", "HD"="#0072B2", "#D55E00", "UNKNOWN"="#CC79A7", "0"="white")
+study_pal = c("This study" = "#7ac57b", "Jin et al" = "#58674f")
+col_fun = colorRamp2(c(-3.5, 0, 3.5), c("blue", "white", "red"))
+column_ha = HeatmapAnnotation(Subtype=col_data$condition,
+                              Study=col_data$study,
+                              which="column",
+                              col=list(Subtype=cbbPalette,
+                                       Study=study_pal), annotation_name_gp = gpar(fontsize=8), 
+                              show_legend=c(FALSE, TRUE), 
+                              show_annotation_name = FALSE,
+                              annotation_height = c(unit(0.1, "cm"), unit(0.1,"cm")),
+                              annotation_legend_param = list(labels_gp=gpar(fontsize=8), title_gp=gpar(fontsize=8)))
+png("../Figures/ATAC_jin_et_al_heatmap_no_LFC.png", width=6, height=4, units = "in",  res=600)
+ Heatmap(t(scale(t(mat))),
+  #                      col = col_fun,
+        name="ATAC\nsignal",
+        cluster_rows = row_hclust,
+        cluster_columns = col_hust,
+        row_dend_reorder=FALSE,
+        column_dend_reorder=FALSE,
+        show_row_dend = FALSE,
+        show_column_names = FALSE,
+        top_annotation = column_ha,
+        heatmap_legend_param= list(labels_gp = gpar(fontsize=8), title_gp=gpar(fontsize=8)))
+
+dev.off()
+```
+
+Finally, Figure 3A had the LFC matrix, and the rows of the heatmap was ordered by them. 
+
+
+```{r}
+sig_matrix <- regions %>%
+  select_at(vars(contains("ATAC_DE"), contains("region_id"))) %>%
+  distinct() %>%
+  arrange(region_id)
+# sig_matrix = regions[,grepl("ATAC_DE", colnames(regions))]
+colnames(sig_matrix) <- sub("ATAC_DE_", "", colnames(sig_matrix))
+colnames(sig_matrix) <- sub("_vs_ND", "", colnames(sig_matrix))
+#colnames(sig_matrix) <- sub("HD", "HY", colnames(sig_matrix))
+sig_matrix <- sig_matrix[,c("MAF", "MMSET", "CCND1", "HD")]
+for (subtype in colnames(sig_matrix)) {
+  sig_matrix[,subtype][sig_matrix[,subtype] != 1] <- "0"
+  sig_matrix[,subtype][sig_matrix[,subtype] == 1] <- subtype
+
+}
+row_hclust <- hclust(dist(sig_matrix != "0"), method="average")
+sig_heat <- Heatmap(as.matrix(sig_matrix),
+                    col=cbbPalette,
+                    cluster_columns=FALSE,
+                    show_heatmap_legend = FALSE,
+                    column_names_side = "top",
+                    column_names_gp = gpar(fontsize=8))
+sig_heat
+```
+
+```{r, fig.height=3, fig.width=5}
+regions_heat <- Heatmap(t(scale(t(mat))),
+  #                      col = col_fun,
+        name="ATAC\nsignal",
+        cluster_rows = row_hclust,
+        cluster_columns = col_hust,
+        row_dend_reorder=FALSE,
+        column_dend_reorder=FALSE,
+        show_row_dend = FALSE,
+        show_column_names = FALSE,
+        top_annotation = column_ha,
+        heatmap_legend_param= list(labels_gp = gpar(fontsize=8), title_gp=gpar(fontsize=8)))
+
+regions_heat + sig_heat # -> combined_heatmap
+
+png("../Figures/jin_et_heatmap.png", height=3, width=5, units="in", res = 300)
+regions_heat + sig_heat 
+dev.off()
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.

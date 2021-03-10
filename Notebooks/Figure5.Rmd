@@ -1,0 +1,764 @@
+---
+title: "Myloma paper figure 5 workbook. "
+output: 
+  html_notebook:
+    code_folding: hide
+  html_document:
+     code_folding: hide
+---
+
+```{r setup, echo=FALSE, include=FALSE,}
+knitr::opts_chunk$set(message = FALSE, warning=FALSE, rownames.print=FALSE)
+gdrive_prefix = "/mnt/G/My Drive/"
+shared_prefix = "/shared/sudlab1/"
+```
+
+
+The purpose of this notebook is to produce figures for the CCND2 enhancer figure in the Myloma ATAC seq project. The aim of the figure is to 
+
+1. Motivate the examination of CCND2 and its enhancers
+2. Show that cancer samples have *either* CCND1 *or* CCND2 expression.
+3. Show that there is an enhancer upstream of CCND2 in the CCND2 gene desert, whose openess correlates with CCND2 expression.
+4. That shutting down this enhancer shuts down CCND2 expression.
+
+The first four parts of this will come from the genomic data. The last is the CRIPRi experiment done in London. 
+
+First step is to note that the CCND1 samples are low on LF5, and that CCND2 is a highly weighted gene in LF5. Thus examine the weights on ATAC regions close to CCND2:
+
+```{r, fig.width=3.5, fig.height=3}
+library(ggplot2)
+library(dplyr)
+atac <- read.delim(file.path(gdrive_prefix,"Students/Jaime/MM project/MOFA/CCND2 superenh/CCND2_SE_abs_weights_log_fold_changes_all_MOFA_features_with_avgs.tsv.gz"))
+ordered_factors = paste0("LF", seq(1,17))
+atac$factor <- factor(atac$factor, levels = rev(ordered_factors))
+subset(atac, factor %in% ordered_factors[1:10]) %>%
+ggplot() + 
+  aes(x=paste(chr, start, end, sep="-"), y=factor, fill = value) + 
+  geom_tile() + 
+  scale_fill_gradient2() + 
+  coord_equal() + 
+  theme_minimal(base_size = 8) +
+  theme(axis.text.x = element_text(angle=45, hjust = 1)) +
+  xlab(NULL) + 
+  ylab(NULL)
+```
+
+We note that there is strong weighting in LF4 and LF5 for all 5 ATAC regions within 1MB of CCND2 that are in the MOFA analysis. 
+There are however, other transcripts within 1MB of these regions. What are they doing?
+
+```{r,fig.width=1.8, fig.height=3}
+rna = read.delim(file.path(gdrive_prefix, "Students/Jaime/MM project/MOFA/CCND2 superenh/CCND2_SE_MOFA_RNA_abs_weights_subgroup_MM_vs_PC_log_fold_changes_all_MOFA_features_with_avgs_gene_symbols.tsv.gz"))
+ordered_factors = paste0("LF", seq(1,17))
+rna$factor <- factor(rna$factor, levels = rev(ordered_factors))
+subset(rna, factor %in% ordered_factors[1:10]) %>%
+ggplot() + 
+  aes(x=SYMBOL, y=factor, fill = value) + 
+  geom_tile() + 
+  scale_fill_gradient2(guide=FALSE) + 
+  coord_equal() + 
+  theme_minimal(base_size = 8) +
+  theme(axis.text.x = element_text(angle=45, hjust = 1)) +
+  xlab(NULL) + 
+  ylab(NULL)
+
+```
+
+So there are three transcripts that show heavy weighting in LF5, but CCND2 is the only one that is protein coding. Lets put all this together into a single plot. It also be good to order everything by its genomic location. To do this, I need to fetch the gene locations from Ensembl. Unfortunately, although quantification was done against Ensembl85, there is no Ensembl85 annotation package, only 86, but I am going to make the assumption that the order of genes hasn't changed. 
+
+```{r}
+
+library(EnsDb.Hsapiens.v86)
+gene_locations <- genes(EnsDb.Hsapiens.v86,
+      filter = list(GeneidFilter(unique(rna$feature))),
+      return.type="data.frame",
+      columns=c("gene_seq_start", "gene_name"))
+rna <- inner_join(rna, gene_locations, by=c("feature"="gene_id") ) %>%
+  mutate(start=gene_seq_start,
+         SYMBOL=gene_name)
+```
+
+Now we can plot a single figure with both the RNA and ATAC on it by joining the two tables of weights together and faceting on "view".
+
+```{r, fig.width=3.5, fig.height=2}
+
+atac %>%
+  mutate(SYMBOL = paste(start, end, sep="-")) %>%
+  dplyr::select(SYMBOL, view, value, factor, start) %>%
+  bind_rows(dplyr::select(rna, SYMBOL, view, value, factor, start)) %>%
+  dplyr::filter(factor %in% ordered_factors[1:5]) %>% 
+  mutate(SYMBOL=reorder(SYMBOL, start)) %>%
+  ggplot() + aes(x=SYMBOL, y=factor, fill = value) +
+  geom_tile() + 
+  scale_fill_gradient2(name="Weight") + 
+  theme_minimal(base_size = 9) +
+  theme(axis.text.x = element_text(angle=45, hjust = 1), 
+        plot.margin = unit(c(0,0,0,0.5), units = "in")
+        #aspect.ratio=1,
+        ) +
+  xlab(NULL) + 
+  ylab(NULL) +
+  facet_grid(~view, scale="free_x", space="free") -> g
+ggsave("Figures/Figure5A.pdf", g, useDingbats=FALSE, width=3.5, height=2)
+ggsave("Figures/Figure5A.png", g, dpi =600, width=3.5, height=2, units = "in")
+print(g)
+
+```
+
+I propose that this forms figure pannel A. 
+
+Next we show that samples have either expression of CCND1 or of CCND2. To do this load up the rlog expression matrix and plot CCND1 vs CCND2. Colouring the points by subgroup might also be useful. I'm also going to do a correlation between CCND1 and CCND2, but excluding the normal samples, as one wouldn't expect either cyclin to be expressed in these. 
+
+```{r, fig.width=3.5, fig.height=2}
+library(tidyr)
+
+# A colour blind friendly pallete for colour points by subtype
+cbbPalette =  c("CD19+ NPC"="#000000", "CD19- NPC" = "grey40", "MAF"="#E69F00", "CCND1"="#56B4E9", "MMSET"="#009E73", "#F0E442", 
+                "MM_OTHER"="grey75", "HD"="#0072B2", "PC"="#000000",  "#D55E00", "UNKNOWN"="#CC79A7")
+
+# Get the CCND1/2 gene ids from the EnsDb
+CCND_IDs <- genes(EnsDb.Hsapiens.v86,
+                 filter=list(GenenameFilter(c("CCND1", "CCND2"))),
+                 return.type="data.frame", 
+                 columns="gene_id")
+
+sample_info <- read.delim("/mnt/G/My Drive/Students/Jaime/MM project/RNA-seq/sample_details.tsv", stringsAsFactors=F) %>%
+  dplyr::filter(RNA_id != "") %>%
+  mutate(CD19=paste0("CD19", CD19, " NPC")) %>%
+  mutate(subgroup=ifelse(subgroup=="ND", CD19, subgroup)) 
+  
+  
+# Read in the epxression matrix, immediately subsetting it to contain only the CCND genes
+ccnd_samples <- read.delim(file.path(gdrive_prefix, "Students/Jaime/MM project/Useful tables/rlog_batch_correct_rna_counts_for_all_samples.tsv.gz")) %>% 
+  dplyr::filter(id %in% CCND_IDs$gene_id)
+
+# Add names to ids, and then basically transpose/melt the table to have one row per
+# sample (also having the subtype) and one column for each of CCND1 and CCND2
+ccnd_samples %>%
+  inner_join(CCND_IDs, by = c("id" = "gene_id")) %>% 
+  dplyr::select(-id) %>%
+  gather("Sample", "expression", -gene_name) %>%
+  spread(key=gene_name, value=expression) %>%
+  extract(Sample, into = c("subtype","Sample"), regex="(.+)_(RS_.+)") %>%
+  left_join(dplyr::select(sample_info, RNA_id, subgroup), by=c("Sample"="RNA_id")) %>%
+  mutate(subgroup=replace_na(subgroup, "UNKNOWN"))-> CCND_levels
+
+# Do this plotting. When adding the trend line, exclude the PC samples.
+ggplot(CCND_levels) + aes(CCND1, CCND2, col=subgroup) +
+  geom_point(size=2, pch=19) + 
+  coord_fixed() + 
+  scale_color_manual(values=cbbPalette, name=NULL) +
+  geom_smooth(data=subset(CCND_levels, subtype != "PC"), 
+              aes(group=1),
+              method="lm", show.legend=FALSE) + 
+  theme_bw(base_size=8) +
+  theme(legend.text = element_text(size=7)) -> g
+
+ggsave("Figures/Figure5B.pdf", g, useDingbats=FALSE, width=3.5, height=2)
+ggsave("Figures/Figure5B.png", g, dpi =600, width=3.5, height=2, units = "in")
+print(g)
+  
+summary(lm(CCND1~CCND2, data=subset(CCND_levels, subtype != "PC")))
+```
+
+I propose this as panel B. One open question is whether we we want the trendline or not.  Thus we can see there is a pretty good inverse corrleation, with the CCND1 samples at one end and the MAF samples at the other. The MMSET samples also seem to have pretty high CCND2, where as the normal samples are well below the line, suggesting a low expression of both CCNDs, alhtough interestingly there isn't as low an expression of CCND2 as in the CCND1 samples. 
+
+The hyperdiploids can be found in several different places. Most are up with the MAF samples, but some two are down in the bottom right-hand corner with the CCND1 samples. Finally there are two samples that seem to have a high expression of both and one that seem to have a low expression of both. This is more easily seen if the subtupes are split out onto seperate plots as below. 
+
+```{r}
+ggplot(CCND_levels) + aes(CCND1, CCND2, col=subtype) +
+  geom_point(size=2, pch=19) + 
+  coord_fixed() + 
+  scale_color_manual(values=cbbPalette) +
+  facet_wrap(~subtype) +
+  theme_bw(base_size=9) +
+  theme(aspect.ratio = 1)
+
+```
+
+Might be useful to have this as a supplimentary figure?
+
+Next we need to look at the correlation between the the openness of the enhancers and the expression of CCND2. To do that we need the matrix with the openness of the chromatin. Because this is so large, we want to filter it to just those regions we are interested, as it comes in.
+```{r}
+atac_sample_data <- read.delim(file.path(gdrive_prefix, "Students/Jaime/MM project/Pan MM vs PC analysis/rlog_batch_correct_read_counts_in_cons_peaks.bed.gz")) %>%
+  dplyr::filter(paste(chr, start, end, sep="-") %in% unique(paste(atac$chr, atac$start, atac$end, sep="-"))) 
+
+```
+
+Now we need to join the ATAC and RNA matricies together. As the samples have different naming schemes between the RNA and the ATAC samples we need a translation table. This is in an excel sheet, which I saved out as a txt file, after change what looked to me like a typo in the excel. 
+
+```{r}
+atac_rna_sample_mapping <- read.delim(file.path(gdrive_prefix, "Students/Jaime/MM project/Pan MM vs PC analysis/Samples.txt"))
+CCND2_enh_rlog  <- atac_sample_data %>%
+  gather("Sample", "rlog", -chr, -start,-end) %>% 
+  extract(Sample, into=c("subtype", "Sample"), regex= "(.+)_([0-9][^\\.]+\\.[^\\.]+)") %>% 
+  mutate(Sample = paste0("A", Sample)) %>% 
+  left_join(atac_rna_sample_mapping, by=c("Sample" = "ATAC.sample.code")) %>% 
+  left_join(CCND_levels, by=c("RNA.sample.code"="Sample", "subtype") )
+  
+```
+
+We can now plot the relationship between the enhancer openness and CCND2 levels. Becuase there are 5 diffrent enhancer regions, we need a way of showing all this data. For now will facet by enhancer region.
+```{r}
+CCND2_enh_rlog %>%
+  mutate(region = paste(start, end, sep="-")) %>%
+  #    subset( Sample != "A26.9B") %>%
+  ggplot() + aes(rlog, CCND2, col=subtype) +
+  geom_point(size=2) + 
+  facet_wrap(~region, scale="free") +
+  theme_bw(base_size=9) +
+  scale_color_manual(values = cbbPalette) + 
+  theme(aspect.ratio = 1) + 
+#  stat_smooth(aes(group=region), method=lm) + 
+  xlab("Chromatin Openess (rlog ATAC counts)") + 
+  ylab("CCND2 (rlog)")
+
+```
+
+In general there does seem to be a correlation between the openness of the chromatin at each region and the expression of CCND2. This relationship is much weaker for the region 4141486-4141840 (expcet that the MAF samples have high openness and high expression), and to some extend the relationships are spoiled by a single outlying HD sample that has a very high openness, but only a moderately high CCND2 expession. It is interesting/worrying that the region with the least correlation is the one with the highest LF5 weighting. 
+
+We can look at the strength of the correlations:
+
+```{r}
+CCND2_enh_rlog %>% 
+#    subset( Sample != "A26.9B") %>%
+  group_by(start) %>%
+  summarise(R2 = cor(rlog, CCND2)^2)
+```
+
+It is a shame that the relationship is messed up by that single sample. Here is what the above plot would look like if we excluded that single point. 
+
+```{r}
+CCND2_enh_rlog %>%
+  mutate(region = paste(start, end, sep="-")) %>%
+  subset( Sample != "A26.9B") %>%
+  ggplot() + aes(rlog, CCND2, col=subtype) +
+  geom_point(size=2) + 
+  facet_wrap(~region, scale="free") +
+  theme_bw(base_size=9) +
+  scale_color_manual(values = cbbPalette) + 
+  theme(aspect.ratio = 1) + 
+#  stat_smooth(aes(group=region), method=lm) + 
+  xlab("Chromatin Openess (rlog ATAC counts)") + 
+  ylab("CCND2 (rlog)")
+
+```
+
+And the correlations:
+
+```{r}
+CCND2_enh_rlog %>% 
+  subset( Sample != "A26.9B") %>%
+  group_by(start) %>%
+  summarise(R2 = cor(rlog, CCND2)^2)
+```
+
+This is significantly better correlations......
+
+How might we show this as a single plot? Options spring to mind. Either just pick one region and show that. The difficulty with this approach is that which one to pick? The obvious choice would be the one with the best LF5 weighting, but that is the one with the worst correlation. We could also pick the one with the best correlation. But that seems like cheating. 
+
+A second option is to show the average of the five for each sample. This might look like:
+
+```{r, fig.width=3.5, fig.height=2}
+CCND2_enh_rlog %>%
+  mutate(region = paste(start, end, sep="-")) %>%
+#    subset( Sample != "A26.9B") %>%
+  group_by(subgroup, Sample) %>%
+  summarise(rlog=mean(rlog), CCND2=mean(CCND2)) %>%
+  ggplot() + aes(rlog, CCND2, col=subgroup) +
+  geom_point(size=2) + 
+#  facet_wrap(~region, scale="free") +
+  theme_bw(base_size=8) +
+  scale_color_manual(values = cbbPalette, name=NULL) + 
+  theme(aspect.ratio = 1, legend.text=element_text(size=7)) + 
+#  stat_smooth(aes(group=region), method=lm) + 
+  xlab("Chromatin Openess\n(mean rlog ATAC counts)") + 
+  ylab("CCND2 (rlog)") -> g
+
+ggsave("Figures/Figure5C.pdf", g, useDingbats=FALSE, width=3.5, height=2 )
+ggsave("Figures/Figure5C.png", g, dpi =600, width=3.5, height=2, units = "in")
+print(g)
+```
+
+```{r}
+CCND2_enh_rlog %>%
+  mutate(region = paste(start, end, sep="-")) %>%
+ #   subset( Sample != "A26.9B") %>%
+  group_by(subtype, Sample) %>%
+  summarise(rlog=mean(rlog), CCND2=mean(CCND2)) %>%
+  ungroup() %>%
+  with(cor.test(rlog,CCND2))
+
+```
+
+This works pretty well. Could be panel C? WIth the per region plots as supplementary figures? Although it is still spoilt by that outlying point. 
+
+It strikes me that since MAF samples are on one end of LF5 and CCND1 on the other that LF5 might represent the balance between CCND1/2, rather than the level of CCND2. To see if they correlate, we need a number that represents CCND1/2 balance. One alternative is a PCA of the CCND1/2 data, which effectively rotates the data so that the CCND1/2 balance will be the x-axis that the perpenticular to that being the y:
+
+```{r, fig.width=3.5, fig.height=3.5}
+ccnd_pca = prcomp(~CCND1 + CCND2, data = CCND_levels, scale=F)
+data.frame(ccnd_pca$x, subtype = CCND_levels$subtype) %>%
+  ggplot() + aes(PC1, PC2, col=subtype) +
+  geom_point(size=2) + 
+  theme_bw(base_size=9) + 
+  scale_color_manual(values=cbbPalette) +
+  theme(aspect.ratio=ccnd_pca$sdev[2]/ccnd_pca$sdev[1])
+```
+
+We can see that now the CCND1 samples have a very low-score on PC1 and the MAF samples a high score. On PC2, at low PC2 there are the PC cells that have low expression of both CCNDs and at the top a couple of HD samples that have high expression of both. How do these PCs correlate with the LFs. To do that I need to load in the LFs for each of the samples.
+
+```{r}
+library(MOFA)
+mofa <- loadModel(file.path(shared_prefix, "General/projects/PC_MM_Atac_seq/ians/MOFA/MOFA.hdf5"))
+LFs <- getFactors(mofa, factors=seq(1,10))
+
+LFs <- data.frame(sample=row.names(LFs), LFs) %>%
+  extract(sample, into=c("sample"), regex=".+_([0-9].+\\..+)") %>%
+  mutate(sample = paste0("A", sample)) %>%
+  left_join(atac_rna_sample_mapping, by=c("sample"="ATAC.sample.code")) %>%
+  dplyr::select(-sample, -MM.ND, Sample=RNA.sample.code) %>%
+  dplyr::filter(Sample %in% CCND_levels$Sample) 
+
+LFs
+```
+
+Now the PC and the LF matrix need ordering so they are in the same order.
+```{r}
+ccnd_pca_values = ccnd_pca$x
+row.names(ccnd_pca_values) = CCND_levels$Sample
+ccnd_pca_values = ccnd_pca_values[as.character(LFs$Sample),]
+
+ccnd_pca_values
+```
+
+Finally the two can be correlated with each other. 
+
+
+```{r}
+cor(ccnd_pca_values, data.matrix(dplyr::select(LFs, -Sample)))
+
+```
+
+Note the highest correlation is of LF5 with PC1 (R^2 = 0.21). Not far behing is LF2 with PC2 and LF8 with both. Thus it does look like to some extent LF5 is reporting on the CCND1/2 balance and PC2 is reporting on the total CCND expression (to an extent). 
+
+But what is going on with LF4. We saw in the panel A that the CCND2 enhancers are correlated with LF4, but CCND2 itself is not. While there is no overall correlation between LF4 and PC1/2, perhaps it deserves a closer look.  
+```{r, fig.height=2}
+data.frame(ccnd_pca_values, Sample=row.names(ccnd_pca_values)) %>%
+  left_join(LFs) %>%
+  left_join(CCND_levels) %>% 
+  left_join(atac_rna_sample_mapping, by=c("Sample" = "RNA.sample.code")) %>%
+  left_join(CCND2_enh_rlog, by=c("ATAC.sample.code" = "Sample", "subtype")) %>%
+  ggplot() + aes(PC2, LF4, col=subtype) +
+#  facet_wrap(~start) +
+  geom_point(size=2) + 
+  scale_color_manual(values=cbbPalette) +
+  theme_bw(base_size=9) + theme(aspect.ratio=1)
+
+```
+
+Observe that there is little going on here except that there is a single sample that is high on PC2 - in fact it is the highest on PC2, and also very low on LF4. In fact the standing out of this single sample is the only thing that is interesting about LF4 (see the biplot grid).
+
+Which sample is this? A quick examinatio of the PC2 values of all the samples reveals that it is `A26.9B`.
+
+```{r, fig.height=2}
+data.frame(ccnd_pca_values, Sample=row.names(ccnd_pca_values)) %>%
+  left_join(LFs) %>%
+  left_join(CCND_levels) %>% 
+  left_join(atac_rna_sample_mapping, by=c("Sample" = "RNA.sample.code")) %>%
+  left_join(CCND2_enh_rlog, by=c("ATAC.sample.code" = "Sample", "subtype")) %>%
+  ggplot() + aes(PC2, LF4, col=subtype, alpha=ATAC.sample.code=="A26.9B") +
+#  facet_wrap(~start) +
+  geom_point(size=2, pch=16) + 
+  scale_colour_manual(values=cbbPalette, guide=FALSE) +
+  scale_alpha_manual(values=c("TRUE"=1, "FALSE"=0.075), name="A26.9B") +
+  theme_bw(base_size=9) + theme(aspect.ratio=1)
+```
+
+It looks here like this is the sample with the highest PC2. Where is it on the CCND1/2 plot?
+
+```{r, fig.height=2}
+CCND2_enh_rlog %>%
+  mutate(region = paste(start, end, sep="-")) %>%
+  group_by(subtype, Sample) %>%
+  summarise(rlog=mean(rlog), CCND2=mean(CCND2), CCND1=mean(CCND1)) %>%
+  ggplot() + aes(CCND1, CCND2, col=subtype, alpha=Sample=="A26.9B") +
+  geom_point(size=2, pch=16) + 
+  theme_bw(base_size=9) +
+  scale_color_manual(values = cbbPalette, guide=FALSE) + 
+  scale_alpha_manual(values=c("TRUE"=1, "FALSE"=0.2), name="A26.9B") +
+  geom_smooth(data=function(x) subset(x, subtype != "PC"), 
+              aes(group=1),
+              method="lm", show.legend=FALSE) + 
+  theme(aspect.ratio = 1)
+
+```
+
+So this is a sample with highish, but not very high levels of both CCND1 and CCND2. Remeber the outlier on the CCND2 enhancer vs CCND2 expression plot. Could this be that point?
+
+
+```{r, fig.height=2}
+CCND2_enh_rlog %>%
+  mutate(region = paste(start, end, sep="-")) %>%
+  group_by(subtype, Sample) %>%
+  summarise(rlog=mean(rlog), CCND2=mean(CCND2), CCND1=mean(CCND1)) %>%
+  ggplot() + aes(rlog, CCND2, col=subtype, alpha=Sample=="A26.9B") +
+  geom_point(size=2, pch=16) + 
+  theme_bw(base_size=9) +
+  scale_color_manual(values = cbbPalette, guide=FALSE) + 
+  scale_alpha_manual(values=c("TRUE"=1, "FALSE"=0.2), name="A26.9B") +
+  theme(aspect.ratio = 1)
+
+```
+
+So this samples is the outlier in nearly all of our analyses. I remains to be seen if it is due to technical issues or it is genuinely biologically different. 
+
+Still ToDo is a genome-browswer like view of the CCDN2 region. The plan is for each subgroup have an openness average openness track as a bar/area plot (i.e. bw view) on top, followed by a heatmap/highly squashed bed view with the FCs of each sample. The samples within each group sorted by CCND2 expression level and a sideways bar graph at the side showing CCND2 expression level.
+
+# Track figure
+
+```{r}
+library(Gviz)
+library(rtracklayer)
+HD_average = DataTrack("data/signals/atac/HD.chr12.bdg.bw", name="HD", type="h", col=cbbPalette["HD"], ylim=c(0,4.2))
+CCND1_average <- DataTrack("data/signals/atac/CCND1.chr12.bdg.bw", name="CCND1", type="h", col=cbbPalette["CCND1"], ylim=c(0,4.2))
+MAF_average <- DataTrack("data/signals/atac/MAF.chr12.bdg.bw", name="MAF", type="h", col=cbbPalette["MAF"] , ylim=c(0,4.2))
+MMSET_average <- DataTrack("data/signals/atac/MMSET.chr12.bdg.bw", name="MMSET", type="h", col=cbbPalette["MMSET"], ylim=c(0,4.2))
+PC_average <- DataTrack("data/signals/atac/PC.chr12.bdg.bw", name="NDPC", type="h", col=cbbPalette["PC"], ylim=c(0,4.2))
+
+plotTracks(list(GenomeAxisTrack(), MAF_average, MMSET_average, HD_average, PC_average, CCND1_average), chromosome="chr12", from=4104176, to=4170788, background.title="white", col.title="black", showAxis=FALSE, fontface.title=1)
+
+```
+
+
+```{r}
+w = GRanges(seqnames = c("chr12"), IRanges(start=3500000, end=4500000))
+#fpranges = import("data/signals/Footprinting/MAF_and_MMSET_MAF_footprints.bed", which=w)
+#fptrack = AnnotationTrack(fpranges, name="MAF FP",
+#                               feature=fpranges$name,
+#                               stacking="squish",
+#                               col=NULL,
+#                           groups="MAF FP")
+#displayPars(fptrack) <- list("MAF"=cbbPalette["MAF"], "MMSET"=cbbPalette["MMSET"])
+maf_fp <- AnnotationTrack(import("data/signals/Footprinting/MAF_subgroup_MAF_FTs_HUMAN.H11MO.1.B.bed", which=w),
+                          
+                          stacking="dense",
+                          fill=cbbPalette["MAF"],
+                          col=cbbPalette["MAF"],
+                          name="MAF FP")
+mmset_fp <- AnnotationTrack(import("data/signals/Footprinting/MMSETsubgroup_MAF_FTs_HUMAN.H11MO.1.B.bed", which=w),
+                          which=w,
+                          stacking="dense",
+                          fill=cbbPalette["MMSET"],
+                          col=cbbPalette["MMSET"],
+                          name="MMSET FP")
+
+```
+
+```{r}
+source("Code/make_granges_from_HiC.R")
+hic_granges <- make_granges_from_hic(contig="chr12",
+                                     start=4004176,
+                                     end=4400000,
+                                     anchor = 4273761, 
+                                     resolution = 5,
+                                     base_path = "data/HiC",
+                                     path_to_liftOver = c("/shared/sudlab1/General/mirror/ucsc/hg38/hg38ToHg19.over.chain",
+                                                          "/shared/sudlab1/General/mirror/ucsc/hg19/hg19ToHg38.over.chain"))
+hic_track = DataTrack(hic_granges, data="count", name="HiC", type="polygon", col.mountain="grey75", fill.mountain=c("grey75", "grey75"),
+                      ylim=c(0,400))
+```
+
+```{r}
+download.file("https://www.cell.com/cms/10.1016/j.cell.2013.03.036/attachment/d14498e0-dbcf-4338-8c39-aeb557547e4b/mmc1.zip", destfile="../data/MM1.S.superenhnacers.hg18.bed.zip")
+unzip("../data/MM1.S.superenhnacers.hg18.bed.zip", exdir="../data/")
+file.rename("../data/cell_6823_mmc1.bed", "../data/MM1.S.superenhacers.hg18.bed")
+ch <- import.chain("/shared/sudlab1/General/mirror/ucsc/hg18/liftOver/hg18ToHg38.over.chain")
+super_enhancers_hg18 <- import(BEDFile("../data/MM1.S.superenhacers.hg18.bed"))
+super_enhancers_hg38 <- liftOver(super_enhancers_hg18$Super_MM1S_Enhancers, ch)
+super_enhancers_track <- AnnotationTrack(super_enhancers_hg38, name="Loven SE", fill="grey75", col="grey75")
+```
+
+
+```{r, dev.args=list(pointsize=40), fig.height=5.4, fig.width=6.5}
+library(GenomicInteractions)
+library(EnsDb.Hsapiens.v86)
+seqlevelsStyle(EnsDb.Hsapiens.v86) <- "UCSC"
+genes_track <- GeneRegionTrack(getGeneRegionTrackForGviz(EnsDb.Hsapiens.v86, chr="chr12", start=4004176, end=4400000),
+                               transcriptAnnotation="symbol", collapseTranscripts="meta", name=NULL, fontsize.group=8,
+                               cex.group=1,
+                               fill="grey20",
+                               col="grey20")
+
+CRISPR_peaks <-data.frame(chromosome=rep("chr12", times=5), 
+                          start=c(4118776, 4142637, 4148346, 4214956, 4273613),
+                          end=c(4119705, 4143370, 4148949, 4216442, 4274496),
+                          id=c(1,2,3,4, "P"))
+guide_track=AnnotationTrack(CRISPR_peaks, name="sgRNA", fill="darkblue", col="darkblue", 
+                            just.group="above",
+                            groupAnnotation="id",
+                            fontsize.group=9, cex.group=1,
+                            rotation.title=0)
+ccnd2_chip=AnnotationTrack("CCND2_peaks.bed", name="CCND2\nChIP", rotation.title=0)
+
+group(ccnd2_chip) <- as.character(1:length(group(ccnd2_chip)))
+JJN3_MAF <- DataTrack("data/signals/MAF_Chip/MM1S_MAF_FC.bw", name="MAF\nChIP", type="h", stream=TRUE, col=cbbPalette["MAF"])
+JJN3_h3k27 <- DataTrack("data/signals/h3k27ac/JJN3_H3K27ac_FC.bw", name="H3K27ac", type="h", stream=TRUE, col=cbbPalette["MAF"])
+MM1S_MED1 <- DataTrack("data/signals/MM1S_MED1.nodup.sorted_RPKM_bin1.bw", name="MED1", type="h", stream=TRUE, col=cbbPalette["MAF"])
+pdf("Figures/figure5Da.pdf", width=6, height=4.3)
+plotTracks(list(hic_track,
+                guide_track,
+                maf_fp,
+                mmset_fp,
+                #super_enhancers_track,
+                JJN3_MAF,
+                JJN3_h3k27,
+                MM1S_MED1,
+                MAF_average, MMSET_average,
+                HD_average,
+                PC_average,
+                CCND1_average,
+                
+
+                genes_track,
+                GenomeAxisTrack()),
+           chromosome="chr12", from=4074176, to=4289000, 
+           background.title="white", col.title="black", fontcolor.title="black",
+           cex.title=1,
+           showAxis=FALSE, 
+           fontface.title=1,
+           fontsize=9,
+           rotation.title=0,
+           sizes=c(0.7,0.7,0.3,0.3, 0.7,0.7,0.7, 1,1,1,1,1,1.2,1)
+           )
+dev.off()
+plotTracks(list(hic_track,
+                guide_track,
+                maf_fp,
+                mmset_fp,
+                #super_enhancers_track,
+                JJN3_MAF,
+                JJN3_h3k27,
+                MM1S_MED1,
+                MAF_average, MMSET_average,
+                HD_average,
+                PC_average,
+                CCND1_average,
+                
+
+                genes_track,
+                GenomeAxisTrack()),
+           chromosome="chr12", from=4074176, to=4289000, 
+           background.title="white", col.title="black", fontcolor.title="black",
+           cex.title=1,
+           showAxis=FALSE, 
+           fontface.title=1,
+           fontsize=9,
+           rotation.title=0,
+           sizes=c(0.7,0.7,0.3,0.3, 0.7,0.7,0.7, 1,1,1,1,1,1.2,1)
+           )
+```
+
+We want to add quantification of CCND2 expression to this.
+
+```{r, fig.width=2, fig.height=2.5}
+ggplot(CCND_levels, aes(x=subtype, y=CCND2)) +
+  geom_boxplot(col="grey70") +
+  geom_point(position=position_jitter(width=0.1), size=0.7) +
+  theme_classic(base_size=9) +
+  scale_x_discrete(limits=rev(c("MAF", "MMSET", "HD", "PC", "CCND1"))) +
+
+  coord_flip() +
+    scale_y_continuous(position="right",
+                       name="CCND2 expression\n(normalized log counts)") +
+  theme(axis.line.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_blank()) -> g
+
+ggsave("Figures/Figure5Db.pdf", g, width=2, height=2.5, useDingbats=FALSE)
+print(g)
+```
+
+## Developmental chromHMM
+
+First lets get a list of all the chromHMM files, download a list of metadata from the web, and match the two up to get the English names of the various cell types. The chromHMM tracks come from Blueprint in two directories "healthy" and "healthy_model". I don't know what the difference is. "Health Model" has way more, so let start by looking at that. 
+
+```{r}
+library(RCurl)
+healthy_model_meta <- data.frame(
+  file = list.files(path="BP_chromHMM/VISUALIZATION_Blueprint_release_201608/VISUALIZATION_healthy_model/",
+                    pattern="*dense.bed")) %>%
+  extract(file, "SAMPLE_NAME", regex="([^_]+)_.+", remove=FALSE ) %>%
+  mutate(file = file.path("BP_chromHMM/VISUALIZATION_Blueprint_release_201608/VISUALIZATION_healthy_model", file))
+
+Blueprint_metadata<- read.delim(text=getURL("ftp://ftp.ebi.ac.uk/pub/databases/blueprint/data_index/homo_sapiens/data.index"), stringsAsFactors = FALSE )
+
+Blueprint_metadata %>%
+  dplyr::select(SAMPLE_NAME, DISEASE, CELL_TYPE) %>% 
+  right_join(healthy_model_meta) %>%
+  dplyr::filter(grepl("B cell", CELL_TYPE) | grepl("plasma", CELL_TYPE)) %>%
+  distinct() %>%
+  arrange(CELL_TYPE)  -> healthy_model_meta
+healthy_model_meta
+
+```
+
+Now lets have a look at what is in the "healthy" directory:
+
+```{r}
+healthy_meta <- data.frame(
+  file = list.files(path="BP_chromHMM/VISUALIZATION_Blueprint_release_201608/VISUALIZATION_healthy",
+                    pattern="*dense.bed")) %>%
+  extract(file, "SAMPLE_NAME", regex="([^_]+)_.+", remove=FALSE ) %>%
+  mutate(file = file.path("BP_chromHMM/VISUALIZATION_Blueprint_release_201608/VISUALIZATION_healthy", file)) %>%
+  left_join(dplyr::select(Blueprint_metadata, SAMPLE_NAME, DISEASE, CELL_TYPE)) %>%
+  distinct()
+healthy_meta
+```
+
+Whats the difference bewteen "C005QQH1" and "S004KBH1"?
+
+```{r}
+Blueprint_metadata %>%
+  dplyr::filter(SAMPLE_NAME %in% c("C005QQH1","S004KBH1")) %>%
+  dplyr::select(STUDY_ID, SAMPLE_NAME, CELL_LINE, DONOR_ID, TISSUE_TYPE,  SAMPLE_BARCODE, SAMPLE_DESCRIPTION  ) %>%
+  distinct()
+
+```
+
+So it seems the difference is the tissue type - one was taken from cord blood, and the other from venous blood. "C005QQH1" Is really the only sample of interest from this list, so we will add this one row to the rest from the healthy_model:
+
+```{r}
+healthy_meta %>%
+  dplyr::filter(SAMPLE_NAME=="C005QQH1") %>%
+  bind_rows(healthy_model_meta) -> healthy_model_meta
+healthy_model_meta
+```
+
+That leaves us in with the following celltypes:
+```{r}
+cell_types = unique(healthy_model_meta$CELL_TYPE)
+cell_types
+```
+
+Now we need to put them in some sort of order. This is difficult because I think there is a branching structure here, so a linear order isn't easy. 
+
+```{r}
+cell_type_order = c(4,3,2,5)
+cell_type_subset <- cell_types[cell_type_order]
+healthy_model_meta %>%
+  dplyr::filter(CELL_TYPE %in% cell_type_subset) %>%
+  mutate(CELL_TYPE=factor(CELL_TYPE, cell_types[cell_type_order], ordered=TRUE)) %>%
+  arrange(CELL_TYPE) -> healthy_model_meta
+
+```
+
+Okay, now to create tracks from each:
+
+```{r}
+state_colours = list("black",
+                      "gray",
+                      "white",
+                      "pink",
+                      "red",
+                      "darkorange",
+                      "mediumspringgreen",
+                      "yellow",
+                      "green",
+                      "lightskyblue",
+                      "midnightblue",
+                      "dodgerblue")
+state_colours <-  setNames(state_colours, as.character(1:length(state_colours)))
+ 
+get_track <- function(x) {
+  filen = x["file"]
+  print(filen)
+  tname = x["CELL_TYPE"]
+  ranges = import(filen, which=w)
+  atrack = AnnotationTrack(ranges, name=tname,
+                               feature=ranges$name,
+                               stacking="dense",
+                               col=NULL,
+                           groups=tname)
+  displayPars(atrack) <- state_colours
+  return (atrack)
+}
+
+tracks =  apply(healthy_model_meta, 1, get_track)
+names(tracks) <- healthy_model_meta$SAMPLE_NAME
+```
+
+Okays, let have a look
+
+```{r}
+pdf("Figures/Figure5E.pdf", width=6, height=4)
+plotTracks(c(GenomeAxisTrack(),
+             MAF_average,
+             genes_track,
+             tracks),
+           chromosome="chr12", from=4074176, to=4289000, 
+           sizes=c(2,2,2.5,rep(1,times=length(tracks))),
+           background.title="white", col.title="black", fontcolor.title="black",
+           cex.title=1,
+           showAxis=FALSE, 
+           fontface.title=1,
+           fontsize=6,
+           rotation.title=0
+           )
+dev.off()
+plotTracks(c(GenomeAxisTrack(),
+             MAF_average,
+             genes_track,
+             tracks),
+           chromosome="chr12", from=4074176, to=4289000, 
+           sizes=c(2,2,2.5,rep(1,times=length(tracks))),
+           background.title="white", col.title="black", fontcolor.title="black",
+           cex.title=1,
+           showAxis=FALSE, 
+           fontface.title=1,
+           fontsize=6,
+           rotation.title=0
+           )
+
+```
+
+```{r}
+Blueprint_metadata %>%
+  dplyr::select(SAMPLE_NAME, DISEASE, CELL_TYPE) %>% 
+  right_join(healthy_model_meta) %>%
+  dplyr::select(CELL_TYPE) %>%
+  distinct() 
+
+```
+
+## Cell Line figure
+```{r}
+cell_lines <- data.frame(cell_line=c("JJN3", "MM1S", "OPM2", "U266", "KMS12BM"), subtype=c("MAF", "MAF", "MMSET", "CCND1", "CCND1" ))
+cell_lines$file <- paste0("data/signals/atac/", cell_lines$cell_line, ".treat_pileup.bw")
+cell_line_atac_tracks <- apply(cell_lines, 1, function(x) DataTrack(x["file"], type="h", name=x["cell_line"], col=cbbPalette[x["subtype"]], ylim=c(0,4.2)))
+MM1S_MAF <- DataTrack("data/signals/MAF_Chip/MM1S_MAF_FC.bw", name="MM1S MAF\nChIP", type="h", stream=TRUE, col="grey75")
+MM1S_h3k27 <- DataTrack("data/signals/h3k27ac/MM1S_H3K27ac_FC.bw", name="MM1S\nH3K27ac", type="h", stream=TRUE, col="grey75")
+JJN3_MAF <- DataTrack("data/signals/MAF_Chip/JJN3_MAF_FC.bw", name="JJN3 MAF\nChIP", type="h", stream=TRUE, col="grey75")
+JJN3_h3k27 <- DataTrack("data/signals/h3k27ac/JJN3_H3K27ac_FC.bw", name="JJN3\nH3K27ac", type="h", stream=TRUE, col="grey75")
+
+png("Figures/FigureS5a.png", width=6, height=4, units = "in", res=600)
+plotTracks(c(guide_track,
+  
+                cell_line_atac_tracks,
+                JJN3_MAF,
+                 MM1S_MAF,
+                JJN3_h3k27,
+                MM1S_h3k27,
+                genes_track,
+                GenomeAxisTrack()),
+           chromosome="chr12", from=4074176, to=4289000, 
+           background.title="white", col.title="black", fontcolor.title="black",
+           cex.title=0.75,
+           showAxis=FALSE, 
+           fontface.title=1,
+           fontsize=9,
+           rotation.title=0,
+           sizes=c(0.7,1,1,1,1,1,1,1,1,1,1.2,1)
+           )
+dev.off()
+
+```

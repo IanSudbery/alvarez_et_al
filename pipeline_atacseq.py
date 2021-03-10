@@ -1271,6 +1271,21 @@ def collapse_tech_reps(infiles, outfile):
     statement = '''Rscript %(script)s %(counts)s %(coldata)s biosample_id %(outfile)s'''
     P.run(statement)
 
+#------------------------------------------------------------------------------
+@follows(mkdir("rlog.dir"))
+@transform(collapse_tech_reps,
+           regex(".+/(pan|subtype).+"),
+           r"rlog.dir/atac_\1_rlog.tsv.gz",
+           r"\1")
+def get_atac_rlogs(infile, outfile, grouping):
+    '''Calcuate rLog normalised, batch corrected, counts in each peak set for
+    each sample. Bit hacky as filenames are hard coded in R script.'''
+
+    job_memory = "16G"
+    script = os.path.join(os.path.dirname(__file__), 
+                          "scripts/atac_%s_norm_and_batch_rlog.R" % grouping)
+    statement = "Rscript %(script)s"
+    P.run(statement)
 
 #----------------------------------------------------------------------------------------
 @transform(collapse_tech_reps,
@@ -1279,7 +1294,7 @@ def collapse_tech_reps(infiles, outfile):
            ".donors_collapsed.tsv.gz")
 def collapse_cd19(infiles, outfile):
     '''Some of the ND libraries were selected for CD19+ and some for CD19-. MOFA analysis
-    reveals little to no difference in these, and each were sequenced inthe same batch. 
+    reveals little to no difference in these, and each were sequenced in the same batch. 
     These will be merged as doing so will remove a variable from the model. Also outputs
     colldata '''
 
@@ -1343,7 +1358,10 @@ def get_atac_de_bed(infile, outfile):
     P.run(statement)
 
 #-----------------------------------------------------------------------------------------
-
+@follows(get_atac_de_bed,
+         get_atac_rlogs)
+def atac_processing():
+    pass
 
 ##########################################################################################
 # RNA Processing
@@ -1560,6 +1578,24 @@ def add_gene_symbols(infile, outfile):
 
     P.run(statement)
 
+#------------------------------------------------------------------------------
+@follows(mkdir("rlog.dir"))
+@subdivide(merge_rna_counts,
+           formatter(),
+           [r"rlog.dir/rna_pan_rlogs.tsv.gz",
+            r"rlog.dir/rna_subtype_rlogs.tsv.gz"])
+def get_rna_rlogs(infile, outfiles):
+    '''Calcuate rLog normalised, batch corrected, counts in each peak set for
+    each sample. Bit hacky as filenames are hard coded in R script.'''
+
+    job_memory = "16G"
+    statements= list()
+    for grouping in ["pan", "subtype"]:
+        script = os.path.join(os.path.dirname(__file__), 
+                              "scripts/rna_%s_norm_and_batch_rlog.R" % grouping)
+        statements.append("Rscript %(script)s" % locals())
+
+    P.run(statements)
 
 #------------------------------------------------------------------------------
 @follows(mkdir("geneset.dir"))
@@ -1671,7 +1707,9 @@ def merge_promoters(infiles, outfile):
 
 
 @follows(merge_promoters,
-         merge_rna_counts)
+         merge_rna_counts,
+         get_rna_rlogs,
+         add_gene_symbols)
 def rna_preprocessing():
     pass
 
@@ -1721,6 +1759,7 @@ def get_1mb_gene_territory(infile, outfile):
                 | gzip > %(outfile)s'''
 
     P.run(statement)
+
 # ----------------------------------------------------------------------------
 @transform(filter_tss,
            regex("DE.dir/sign_(.+)_atac.+.bed.gz"),
@@ -1757,6 +1796,7 @@ def intersect_atac_and_genes(infiles, outfile):
 
     P.run(statement)
 
+# ----------------------------------------------------------------------------
 @follows(add_gene_symbols)
 @transform(intersect_atac_and_genes,
            regex("DE.dir/sign_(.+)_atac.+"),
@@ -1771,6 +1811,93 @@ def filter_to_de_genes(infiles, outfile):
     pipelineAtacseq.merge_atac_and_rna_de(peaks, genes, outfile, logfile,
                                           submit=True)  
 
+# ----------------------------------------------------------------------------
+@follows(filter_to_de_genes)
+def data_combination():
+    pass
+
+##########################################################################################
+##                    MOFA
+##########################################################################################
+@transform(collapse_tech_reps,
+           regex(".+/pan.+"),
+           r"rlog.dir/atac_pan_peaks_subgroup_correction_rlog.tsv.gz")
+def get_pan_peaks_subgroup_normed(infile, outfile):
+    '''For the MOFA input, we use the pan myeloma peaks, but when batch correcting we
+    account for subgroup differences.'''
+
+    job_memory="16G"
+    script = os.path.join(os.path.dirname(__file__), "scripts/atac_pan_peaks_subgroup_norm_rlog.R")
+    statement = "Rscript %(script)s"
+    P.run(statement)
+
+
+#----------------------------------------------------------------------------------------
+@transform(get_pan_peaks_subgroup_normed,
+           suffix(".tsv.gz"),
+           add_inputs(merge_promoters),
+           "_no_tss.tsv.gz")
+def filter_rlog_tss(infiles, outfile):
+    '''Filter out potential TSS sequences from the ATAC rlog tables'''
+
+    infile, tss = infiles
+    statement='''
+    zcat %(infile)s | awk 'NR==1' | gzip > %(outfile)s &&
+
+    paste <(zcat %(infile)s 
+            | awk 'NR!=1' 
+            | cut -f 1 
+            | awk 'BEGIN {FS =":"} {printf("%%s\\t%%s\\n", $1,$2)}' 
+            | awk 'BEGIN {FS ="-"} {printf("%%s\\t%%s\\n", $1,$2)}')
+          <(zcat %(infile)s
+            | awk 'NR!=1'
+            | cut -f 2-)
+     | bedtools intersect -v 
+                          -a -
+                          -b %(tss)s
+     | awk 'BEGIN { FS ="\\t";OFS=FS} 
+                  {$1=$1":"$2"-"$3;$2="";$3=""} 
+                  {printf("%%s\\n", $0)}' 
+     | cut --complement -f 2,3 
+     | gzip 
+     >> %(outfile)s '''
+
+    P.run(statement)
+
+
+#----------------------------------------------------------------------------------------
+@follows(mkdir("mofa.dir"))
+@transform(get_rna_rlogs,
+           regex(".+/rna_subtype.+"),
+           add_inputs(filter_rlog_tss),
+           "mofa.dir/atac_and_rna_mofa.RData")
+def train_atac_and_rna_mofa(infiles, outfile):
+    '''Train MOFA using pan ATAC peaks, batch corrected accounting for subgroup, and RNA
+    expression, similarly batch corrected.  Trained object is output that subsequent
+    tasks will extract the required data from'''
+
+
+    rna_file, atac_file = infiles
+    outbase = P.snip(outfile, ".RData")
+    script = os.path.join(os.path.dirname(__file__), "scripts/train_MOFA.R")
+    seed = "4747"
+    job_memory = "16G"
+    statement='''
+            Rscript %(script)s
+                    %(atac_file)s
+                    %(rna_file)s
+                    %(outbase)s.png
+                    %(outbase)s.hd5
+                    %(outbase)s.RData
+                    %(seed)s
+                    > %(outbase)s.log '''
+    P.run(statement, job_condaenv="/fastdata/mb1ims/mm_rerun/mofa_env")
+
+
+@follows(train_atac_and_rna_mofa)
+def MOFA():
+    pass
+
 ##########################################################################################
 ##                   Targets          
 ##########################################################################################
@@ -1780,6 +1907,14 @@ def filter_to_de_genes(infiles, outfile):
         getPostDuplicationStats,
         calculateLibrarycomplexity)
 def get_stats():
+    pass
+
+# ----------------------------------------------------------------------------
+@follows(atac_processing,
+         rna_preprocessing,
+         data_combination,
+         MOFA)
+def full():
     pass
 
 if __name__ == "__main__":

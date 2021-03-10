@@ -1,0 +1,129 @@
+---
+title: "Supplementary table 6"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+subgroup_regions_genes <- read.delim("../data/MM_subgroup_differential_genes_regulated_differential_enhancers.bed", stringsAsFactors = FALSE)
+
+```
+
+
+# Enhanced DE genes over genome
+
+```{r}
+enrichr_pathways_enhanced_genes_over_genome <- read.delim("../data/gene_sets/enrichr_pathways_enhanced_genes_over_genome.tsv", stringsAsFactors = FALSE)
+```
+
+```{r}
+library(RSQLite)
+library(dplyr)
+db <- dbConnect(SQLite(), "/shared/sudlab1/General/mirror/gene_sets/enrichr/csvdb")
+get_enrichr_genes <- function(gs_cat, pathway, db, de_table) {
+  query = dbGetQuery(db,
+                     paste0("SELECT ensembl_gene_id as gene_id FROM genecats WHERE gs_cat ='",
+                             gs_cat, "'AND gene_set='", pathway, "'"))
+  overlapping_genes = unique(de_table$SYMBOL[de_table$gene_id %in% query$gene_id])
+  overlapping_genes = paste(overlapping_genes, collapse=",")
+  return(overlapping_genes)
+}
+
+enrichr_pathways_enhanced_genes_over_genome <- enrichr_pathways_enhanced_genes_over_genome %>%
+  rowwise() %>%
+  mutate(leading_genes = get_enrichr_genes(gs_cat, category, db, subgroup_regions_genes))
+
+```
+
+```{r}
+msigdb_pathways_enhanched_genes_over_genome <- read.delim("../data/gene_sets/MSigDB_enhanced_genes_over_genome.tsv", stringsAsFactors = FALSE)  %>% 
+  dplyr::select(gs_cat, category, numDEInCat, numInCat, FDR=padj, enrichment )
+
+categories <- msigdbr::msigdbr() %>% mutate(entrez_gene = as.character(entrez_gene))
+entrez_to_ensembl <- AnnotationDbi::select(org.Hs.eg.db::org.Hs.eg.db, keys=unique(as.character(categories$entrez_gene)), keytype = "ENTREZID", columns="ENSEMBL")
+msigdb_categories <- categories %>%
+  inner_join(entrez_to_ensembl, by=c("entrez_gene" = "ENTREZID")) %>% 
+  dplyr::select(ENSEMBL, gs_name, gs_cat) %>% 
+  filter(!is.na(ENSEMBL))
+
+get_msigsb_genes <- function(gs_cat, pathway, msigdb, de_table) {
+  gene_cat <- msigdb[msigdb$gs_cat == gs_cat & msigdb$gs_name==pathway,]
+  overlapping_genes = unique(de_table$SYMBOL[de_table$gene_id %in% gene_cat$ENSEMBL])
+  overlapping_genes = paste(overlapping_genes, collapse=",")
+  return (overlapping_genes)
+}
+
+msigdb_pathways_enhanched_genes_over_genome <- msigdb_pathways_enhanched_genes_over_genome %>%
+  rowwise() %>%
+  mutate(leading_genes = get_msigsb_genes(gs_cat, category, msigdb_categories, subgroup_regions_genes))
+
+```
+
+```{r}
+library(tidyr)
+suppl_table_6 <- bind_rows(list(EnrichR=enrichr_pathways_enhanced_genes_over_genome, MSigDB=msigdb_pathways_enhanched_genes_over_genome), .id="Database")
+write.table(suppl_table_6, "../Figures/Supplementary_table_6.tsv", sep="\t", row.names=FALSE, quote=FALSE)
+```
+
+
+# Enhanced Genes over DE genes
+
+```{r}
+enrichr_enhanced_genes_over_de_genes <- read.delim("../data/gene_sets/enrichr_pathways_enhanced_genes_over_de_genes.tsv", stringsAsFactors = FALSE) %>% 
+  rowwise() %>%
+  mutate(leading_genes = get_enrichr_genes(gs_cat, category, db, subgroup_regions_genes))
+
+```
+
+```{r}
+msigdb_enhanced_genes_over_de_gense <- read.delim("../data/gene_sets/MSigDB_enhanced_genes_over_DE_genes.tsv", stringsAsFactors=FALSE) %>%
+  dplyr::select(gs_cat, category, numDEInCat, numInCat, FDR=padj, enrichment ) %>%
+  rowwise() %>%
+  mutate(leading_genes = get_msigsb_genes(gs_cat, category, msigdb_categories, subgroup_regions_genes))
+
+```
+
+
+```{r}
+
+suppl_table_7 <- bind_rows(list(EnrichR = enrichr_enhanced_genes_over_de_genes, MSigDB = msigdb_enhanced_genes_over_de_gense), .id="Database")
+write.table(suppl_table_7, "../Figures/Supplementary_table_7.tsv", sep="\t", row.names=FALSE,quote=FALSE)
+```
+
+# Subgroup enhancered over DE. 
+
+```{r}
+enrichr_subgroup_genes_over_de_genes <- read.delim("../data/gene_sets/enrichr_pathways_enhanced_subtype_genes_over_de_genes.tsv",
+                                                   stringsAsFactors = FALSE) %>%
+  rowwise() %>%
+  mutate(leading_genes = get_enrichr_genes(gs_cat, category, db, subgroup_regions_genes[subgroup_regions_genes[,paste0("ATAC_DE_", subtype, "_vs_ND")] == 1 &
+                                                                                        subgroup_regions_genes[,paste0("RNA_DE_" , subtype, "_vs_ND")] == 1,]))
+  
+
+```
+
+```{r}
+msigdb_subgroup_genes_over_de_genes <- read.delim("../data/gene_sets/MSigDB_subgroup_enhanced_genes_over_de_genes.tsv",
+                                                  stringsAsFactors=FALSE) %>%
+  dplyr::select(subtype, gs_cat, category, numDEInCat, numInCat, FDR=padj, OR) %>%
+  rowwise %>%
+  mutate(leading_genes = get_msigsb_genes(gs_cat, category, msigdb_categories, 
+                                            subgroup_regions_genes[subgroup_regions_genes[,paste0("ATAC_DE_", subtype, "_vs_ND")] == 1 &
+                                            subgroup_regions_genes[,paste0("RNA_DE_" , subtype, "_vs_ND")] == 1,]))
+
+```
+
+```{r}
+suppl_table_8 <- bind_rows(EnrichR = enrichr_subgroup_genes_over_de_genes, MSigDB = msigdb_subgroup_genes_over_de_genes, .id="Database")
+write.table(suppl_table_8, "../Figures/Supplementary_table_8.tsv", sep="\t", row.names=FALSE,quote=FALSE)
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.

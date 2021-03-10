@@ -1,0 +1,220 @@
+---
+title: "InTAD assignment of enhancers"
+author: "Ian Sudbery"
+date: "04/08/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+InTAD is software that uses correlation between enhancers and promoters to assign pairing relationships. It limits it's searches to only look with TADs. The assumption is that because at the highest level TADs are stable between cell types, you should be able to use TADs from one experiment to assign enhancers in another, even if the cell type is different. It needs 4 inputs:
+
+1. A matrix of epigenetic scores (here we will use ATAC counts)
+2. A GRanges with the location of the features in 1.
+3. RNAseq signal of gene expression
+4. GRanges for 3.
+
+Columns of 1 must match columns of 3.
+
+First load in our matricies:
+
+```{r}
+library(GenomicFeatures)
+library(EnsDb.Hsapiens.v86)
+library(dplyr)
+atac_data <- read.delim("../data/subgroup_atac_rlog.tsv.gz")
+rnaseq_data <- read.delim("../data/rlog_batch_correct_rna_counts_for_all_samples.tsv.gz")
+de_genes <- read.delim("../data/new_subgroup_MM_vs_PC_all_DE_genes_all_cond.tsv.gz", 
+                       stringsAsFactors = FALSE) %>%
+  na.omit() %>%
+  rowwise() %>%
+  dplyr::filter(padj < 0.1,
+         any(abs(log2FoldChange_HD_vs_ND) >= 1.5,
+             abs(log2FoldChange_MMSET_vs_ND) >= 1.5,
+             abs(log2FoldChange_MAF_vs_ND) >= 1.5,
+             abs(log2FoldChange_CCND1_vs_ND) >=1.5))
+
+de_regions <- read.delim("../data/MM_subgroup_differential_ATAC-seq_regions_no_TSS.tsv")
+
+atac_data <- atac_data %>%
+  inner_join(dplyr::select(de_regions, chr, start, end))
+rnaseq_data <- rnaseq_data[rnaseq_data$id %in% de_genes$id,]
+rownames(rnaseq_data) = rnaseq_data$id
+atac_granges <- GRanges(atac_data)
+seqlevelsStyle(EnsDb.Hsapiens.v86) <- "UCSC"
+gene_granges <- genes(EnsDb.Hsapiens.v86, filter=GeneIdFilter(rownames(rnaseq_data)))
+atac_data <- atac_data[,-c(1:3)]
+```
+
+The column names of the atac data need to match the colnames of the rnaseq data, which at the moment they don't. So we need to map the samples using the table "Samples.txt" from Useful tables. 
+
+```{r}
+library(tidyr)
+library(dplyr)
+atac_rna_sample_mapping <- read.delim("../data/Samples.txt")
+sample_info_rna <- data.frame(rnaseq_sample = colnames(rnaseq_data[,-1])) %>%
+  extract(rnaseq_sample, into=c("subtype", "rna_sample"), regex="(.+)_(RS_.+)")
+sample_info_atac <- data.frame(atac_sample=colnames(atac_data)) %>%
+  extract(atac_sample, into=c("subtype", "atac_sample"), regex= "(.+)_([0-9][^\\.]+\\.[^\\.]+)") %>% 
+  mutate(atac_sample = paste0("A", atac_sample)) %>%
+  left_join(atac_rna_sample_mapping, by=c("atac_sample"="ATAC.sample.code")) %>%
+  rename("rna_sample"=RNA.sample.code) 
+
+colnames(atac_data) = sample_info_atac$rna_sample
+
+rnaseq_data = data.matrix(rnaseq_data[,-1])
+colnames(rnaseq_data) = sample_info_rna$rna_sample
+atac_data <- atac_data[, sample_info_rna$rna_sample]
+sample_info_atac <- sample_info_atac[match(sample_info_rna$rna_sample, sample_info_atac$rna_sample),]
+rnaseq_data <- rnaseq_data[gene_granges$gene_id,]
+rownames(sample_info_atac) <- sample_info_atac$rna_sample
+sample_info_atac <- sample_info_atac[sample_info_rna$rna_sample,]
+summary(colnames(rnaseq_data) == colnames(atac_data))
+
+```
+
+Now we can create the InTAD object. As the counts are already logged, we need to tell it not to do that. As we are only using DE genes, there is no need to filter on expression. 
+
+```{r}
+library(InTAD)
+intad <- newSigInTAD(atac_data, atac_granges, rnaseq_data, gene_granges, sample_info_atac, performLog=FALSE, ncores=4 )
+```
+
+We will use TAD defined in GM12879 from Rao et al 2014, as downloaded from  the Yue lab 3D genome browser. 
+
+```{r}
+library(rtracklayer)
+GM12878_tabs <- import("../data/HiC/hg38/GM12878_Rao_2014-raw_TADs.txt", format="bed")
+```
+The final step in preparing the object is to apply the TADs to it. 
+
+```{r}
+intad_tads <- combineInTAD(intad, GM12878_tabs)
+```
+
+All that remains now is to run the correlation
+
+```{r}
+intad_corr <- findCorrelation(intad_tads, adj.pval = TRUE, plot.proportions = TRUE, method="pearson")
+```
+
+
+
+Lets have a look at what we've got then. Size of correlation for qvalue < 0.05:
+
+```{r}
+library(ggplot2)
+ggplot(intad_corr) + aes(x=cor, fill=qvalue<0.05) +
+  geom_histogram() + 
+  theme_bw() +
+  scale_fill_manual(values=c("TRUE"="red", "FALSE"="grey30"))
+print(with(intad_corr, table(sig=qvalue<0.10, positive=cor>0)))
+print(sum( intad_corr$cor > 0)/length(intad_corr$cor))
+```
+
+
+
+```{r}
+intad_corr <- as.data.frame(atac_granges) %>%
+  mutate(peakloc=paste0(seqnames,":", start, "-", end), peakid=as.character(seq_along(start))) %>%
+  select(peakid, peakloc) %>%
+  right_join(intad_corr)
+```
+
+```{r}
+distance_only <- read.delim("../data/new_subgroup_MM_vs_PC_DE_ATAC_DE_RNA_1Mb.tsv.gz") %>%
+  mutate(peakloc = paste0(chr, ":", start, "-", end)) #%>%
+  #inner_join(intad_corr, by=c("peakloc", "gene_id"="gene"))
+
+ggplot(distance_only) +
+  aes(x=cor, fill=qvalue < 0.1) +
+  geom_histogram(position="stack") + 
+  theme_bw() +
+  scale_fill_manual(values=c("TRUE"="red", "FALSE"="grey30"))
+
+with(distance_only, table(sig=qvalue<0.10, positive=cor>0))
+sum( distance_only$cor > 0)/length(distance_only$cor)
+```
+
+
+```{r}
+intad_corr %>%
+  group_by(gene) %>%
+  summarize(sig=any(qvalue<0.05 & cor > 0.5)) %>%
+  group_by(sig) %>%
+  summarize(n=n_distinct(gene))
+
+```
+
+```{r}
+intad_corr %>%
+  group_by(peakid) %>%
+  summarize(sig=min(qvalue)) %>%
+  group_by(sig < 0.1) %>%
+  summarize(n=n_distinct(peakid))
+
+```
+
+
+
+```{r}
+save(intad_corr, file="intad_results.RData")
+write.table(intad_corr, gzfile("intad_results.tsv.gz", "w"))
+```
+
+Lets have a look at some examples. For example what is going on at CCND2, as we know this is a positive control.
+
+```{r}
+subset(intad_corr, qvalue < 0.1 & name=="CCND2")
+```
+
+Many signals! Of the 5 we examined in the figure 5 notebook, three are here. They are the three with the highest correlations. There are several others here. They must have not been included in the MOFA analysis. 
+
+```{r}
+library(goseq)
+
+ sig_associations <- de_genes %>%
+  dplyr::select(id) %>%
+  left_join(intad_corr, by=c("id"= "gene")) %>% 
+  mutate(qvalue = replace_na(qvalue, 0)) %>%
+  group_by(id) %>%
+  summarise(sig=any(qvalue < 0.05 & !is.na(cor) & cor > 0.5))
+
+ gene_names <-   sig_associations$id
+ sig_associations <- sig_associations$sig
+ names(sig_associations) <- gene_names
+ asso_pwf <- nullp(sig_associations, "hg38", "ensGene")
+```
+
+```{r}
+source("/shared/sudlab1/General/mirror/gene_sets/enrichr/enrichr.R")
+library(RSQLite)
+pathways <- run_goseq_on_enrichr_cats(asso_pwf, "/shared/sudlab1/General/mirror/gene_sets/enrichr/csvdb")
+```
+
+```{r}
+
+pathways %>% filter(FDR < 0.05 ) %>%
+  arrange(desc(OR)) %>%
+  mutate(gs_cat = sub("_20[0-9]{2}[a-z]?$", "", gs_cat)) %>%
+  group_by(gs_cat)%>%
+  mutate(n_in_gs_cat = n()) %>%
+  ungroup() %>%
+  mutate(gs_cat = ifelse(n_in_gs_cat>4, gs_cat, "other")) %>%
+  group_by(gs_cat)%>%
+  dplyr::slice(1:20) %>%
+  ungroup() %>%
+    ggplot() + 
+  aes(x=reorder(category, OR), y= OR, col=-log10(FDR)) +
+  geom_point(size=2.5) +
+  coord_flip() +
+  theme_bw(base_size=8) + 
+  scale_x_discrete(labels=function(x) substr(x, 1, 40), name=NULL) +
+  scale_y_continuous(limits=c(1,NA), trans="log2", name="Fold Enrichment") +
+  facet_wrap(~gs_cat, scale="free_y")
+
+sum(asso_pwf$DEgenes > 0)
+```
+

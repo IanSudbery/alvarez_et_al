@@ -1,0 +1,122 @@
+---
+title: "Pathway analysis of de novo enhancers"
+output: html_notebook
+---
+
+Analysis of the pathways enriched in *de novo* enhancers. It is unclear if it is best to compared to 
+
+a) All genes
+b) DE genes
+c) Genes with non-denovo enhancers.
+
+Also unclear whether to use the MSigDB pathways, or the enrichr pathways. Doing all these combinations would be 6 different analyses. 
+
+The easiest to do is genes with de-novo enhancers vs genes with non-denovo enahancers. The next best would probably be v genome?
+
+The data file has much of the data already
+
+```{r}
+library(dplyr)
+library(tidyr)
+source("/shared/sudlab1/General/mirror/gene_sets/enrichr/enrichr.R")
+enhancers <- read.delim("../data/pan_DA_MM_enhancers_regulating_DE_genes_with_B_cell_classification.tsv")
+print(unique(enhancers$Type.of.region))
+enhancers %>%
+  select_at(vars(gene_id,contains("state"), contains("Type") )) %>% head()
+
+```
+
+
+De-novo enhancers have the type "De novo MM enhancers", so it is easy to make a significance vector:
+
+
+```{r}
+library(goseq)
+enhancers %>%
+#  filter(Type.of.region != "No_consensus_state") %>%
+#  filter(Type.of.region != "All cell types deactivated regions/no predominant state") %>%
+  group_by(gene_id) %>%
+  summarise(de_novo = any(Type.of.region=="De novo MM enhancers"), known=ifelse(all(length(Type.of.region[Type.of.region!="De novo MM enhancers"]) > 0 &
+                                                                                      Type.of.region[Type.of.region!="De novo MM enhancers"] %in% 
+                                                                                  c("No_consensus_state", "All cell types deactivated regions/no predominant state")),
+                                                                                "Unknown", as.character(any(Type.of.region!="De novo MM enhancers")))) %>%
+  with(., table(de_novo, known))
+
+
+```
+
+Every gene that has a de-novo enhancer, also has a "known" enhancer. However, "known" here includes those without a consensus state. 
+
+```{r}
+
+sig_genes <- enhancers$gene_id[enhancers$Type.of.region == "De novo MM enhancers"]
+sig_genes <- unique(enhancers$gene_id) %in% sig_genes
+names(sig_genes) <- unique(enhancers$gene_id)
+de_novo_over_enh <- nullp(sig_genes, genome="hg38", id="ensGene")
+
+
+```
+
+```{r}
+categories <- msigdbr::msigdbr() %>% mutate(entrez_gene = as.character(entrez_gene))
+entrez_to_ensembl <- AnnotationDbi::select(org.Hs.eg.db, keys=unique(as.character(categories$entrez_gene)), keytype = "ENTREZID", columns="ENSEMBL")
+
+
+list_categories <- categories %>%
+  inner_join(entrez_to_ensembl, by=c("entrez_gene" = "ENTREZID")) %>% 
+  dplyr::select(ENSEMBL, gs_name, gs_cat) %>% 
+  filter(!is.na(ENSEMBL))
+list_categories <- split(list_categories$gs_name, list_categories$ENSEMBL, drop = TRUE)
+category_info <- dplyr::select(categories, gs_name, gs_id, gs_cat, gs_subcat) %>%
+  dplyr::distinct()
+
+get_odds_ratio <- function (numInCat, numDEInCat, all_genes, numDEgenes) {
+  n11 = numDEInCat
+  n01 = numInCat - numDEInCat
+  n10 = numDEgenes - numDEInCat
+  n00 = all_genes - n11 - n01 - n10
+  
+  return ((n00*n11)/(n01*n10))
+}
+```
+
+
+I don't think we are going to find anything comparing de_novo marked genes to all enhanced genes, but we might as well try:
+```{r}
+
+run_goseq_msigdb<- function (pwf, msigdb) {
+  result <- goseq(de_novo_over_enh, gene2cat = list_categories)
+  result$FDR <- p.adjust(result$over_represented_pvalue)
+  result$OR <- get_odds_ratio(result$numInCat, result$numDEInCat, length(pwf$DEgenes), sum(pwf$DEgenes))
+  return(result)
+}
+de_novo_enh_over_known <- run_goseq_msigdb(de_novo_over_enh, list_categories)
+table(de_novo_enh_over_known$FDR < 0.1)
+```
+
+What about de-novo marked genes over all de_genes:
+
+
+```{r}
+all_de_genes <- read.delim("../data/pan_MM_differential_genes.tsv", stringsAsFactors = FALSE)
+
+table(unique(enhancers$gene_id) %in% all_de_genes$id)
+de_novo_over_DE <- union(all_de_genes$id, enhancers$gene_id)
+de_novo_over_DE_sig <- as.numeric(de_novo_over_DE %in% enhancers$gene_id[enhancers$Type.of.region=="De novo MM enhancers"])
+names(de_novo_over_DE_sig) <- de_novo_over_DE
+
+de_novo_over_DE_pwf <- nullp(de_novo_over_DE_sig, genome="hg38", id="ensGene")
+```
+
+
+```{r}
+de_novo_over_DE <- run_goseq_msigdb(de_novo_over_DE_pwf, list_categories)
+table(de_novo_over_DE$FDR < 0.1)
+```
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.

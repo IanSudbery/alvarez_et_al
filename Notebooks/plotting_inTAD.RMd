@@ -1,0 +1,27 @@
+---
+title: "R Notebook"
+output: html_notebook
+  ---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r, fig.width=3, fig.height=1.5}
+library(ggplot2)
+intad <- read.delim("../data/intad_corr_table_DA_regions_no_TSS_with_DE_genes.tsv.gz", stringsAsFactors = FALSE)
+ggplot(intad) + aes(cor, fill=qvalue<0.05) +
+  geom_histogram() + 
+  theme_bw(base_size=9) +
+  xlab("Gene/enhancer correlation") +
+  geom_vline(xintercept=0, col="grey50", lty=2) +
+  scale_fill_manual(values=c("FALSE"="grey25", "TRUE"="red"), labels=c("FALSE"="Not\nSign.", "TRUE"="Sign.\nCor"), name=NULL) -> g
+ggsave("../Figures/Figure1C.png", g, height=1.5, width=3, dpi=300)
+print(g)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.

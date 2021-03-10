@@ -1,0 +1,213 @@
+---
+title: "Example gene plots"
+output: html_notebook
+---
+
+
+
+```{r}
+source("make_granges_from_HiC.R")
+library(Gviz)
+cbbPalette =  c("PC"="#000000", "MAF"="#E69F00", "CCND1"="#56B4E9", "MMSET"="#009E73", "#F0E442", 
+                "MM_OTHER"="grey75", "HD"="#0072B2", "#D55E00", "#CC79A7")
+ATAC_mm = sapply(c("MAF", "MMSET", "HD", "CCND1"), function(x) 
+  DataTrack(paste0("../data/signals/atac/", x,".treat_pileup.bw"),
+            type="polygon",
+            col.mountain=NA,
+            fill.mountain=c(cbbPalette[x],cbbPalette[x]),
+            ylm=c(0,4.2),
+            name=  x),
+  simplify=FALSE
+)
+
+ATAC_pc <- DataTrack("../data/signals/atac/PC.treat_pileup.bw",
+            type="polygon",
+            col.mountain=NA,
+            fill.mountain=c(cbbPalette["PC"],cbbPalette["PC"]),
+            ylm=c(0,4.2),
+            name="PC"
+)
+
+fp_tracks =  sapply(c("MAF", "MMSET", "HD", "CCND1", "NDs"),
+                    function(x)
+                      DataTrack(paste0("../data/signals/Footprinting/ALL_",x,"_FT_Density_sorted.bw"),
+                                type="histogram",
+                                col.histogram=NA,
+                                fill.histogram=cbbPalette[x],
+                                ylim=c(0,75),
+                                alpha=0.2,
+                                name= "FP density"),
+                    simplify=FALSE)
+
+MAF_ChIP <- DataTrack("../data/signals/MAF_Chip/JJN3_MAF_FC.bw",
+                      type="polygon",
+                      col.mountain=cbbPalette["MAF"],
+                      fill.mountain=c(cbbPalette["MAF"],cbbPalette["MAF"]),
+                      name= "MAF ChIP")
+
+H3K27ac <- sapply(c("../data/signals/h3k27ac/JJN3_H3K27ac_FC.bw",
+                    "../data/signals/h3k27ac/U-266_c01.ERX297418.H3K27ac.bwa.GRCh38.20150528.bw"),
+                  DataTrack,
+                  type="polygon",
+                  col.mountain=NA,
+                  lwd.mountain=0.01,
+                  alpha=1,
+                  ylim=c(0,80),
+                  name= "H2K27ac",
+                  simplify = FALSE)
+displayPars(H3K27ac[[2]]) <- list(fill.mountain=c(cbbPalette["CCND1"],cbbPalette["CCND1"]), alpha=0.6)
+displayPars(H3K27ac[[1]]) <- list(fill.mountain=c(cbbPalette["MAF"],cbbPalette["MAF"]))
+
+                  
+```
+
+
+```{r, fig.width=4, fig.height=3}
+pdf("../Figures/DKK1.pdf", width=4, height=3, useDingbats = FALSE)
+gene_plot(chr="chr10", start=52204766, end=52501713,
+          atac_mm = ATAC_mm, atac_ylim = 3,
+          atac_pc = ATAC_pc, 
+          h3k27ac = H3K27ac, h3k27ac_ylim = 15,
+          footprints = fp_tracks,
+          hic = FALSE,
+          promoter = 15314281)
+dev.off()
+
+          
+
+```
+
+```{r,  fig.width=4, fig.height=2.5}
+library(ggplot2)
+pdf("../Figures/CD28.pdf", width=4, height=2, useDingbats = FALSE)
+gene_plot(chr="chr2", start=203548685, end=203848722,
+          atac_mm = ATAC_mm, atac_ylim = 2,
+          atac_pc = ATAC_pc, 
+   
+          h3k27ac = H3K27ac, h3k27ac_ylim = 30,
+          footprints = fp_tracks,
+          hic = FALSE,
+          promoter = 203706475) -> CD28
+dev.off()
+
+```
+
+```{r, fig.width=4, fig.height=2}
+
+pdf("../Figures/HGP.pdf", width=4, height=2, useDingbats = FALSE)
+gene_plot(chr="chr7", start=81630539, end=81914640,
+          atac_mm = ATAC_mm, atac_ylim = 3,
+          atac_pc = ATAC_pc, 
+          h3k27ac = H3K27ac, h3k27ac_ylim = 50,
+          footprints = fp_tracks)
+dev.off()
+```
+
+```{r}
+pdf("../Figures/UCHL1.pdf", width=4, height=2, useDingbats = FALSE)
+gene_plot(chr="chr4", start=41218870, end=41312543,
+          atac_mm = ATAC_mm, atac_ylim = 2,
+          atac_pc = ATAC_pc, 
+          h3k27ac = H3K27ac, h3k27ac_ylim = 20,
+          footprints = fp_tracks)
+dev.off()
+
+```
+
+```{r, fig.height=1.5, fig.width=4}
+   seqlevelsStyle(EnsDb.Hsapiens.v86) <- "UCSC"
+   genes_track <- GeneRegionTrack(getGeneRegionTrackForGviz(EnsDb.Hsapiens.v86, chr="chr12", start=4004176, end=2*4273761 -4004176),
+                                          transcriptAnnotation="symbol", collapseTranscripts="meta", name=NULL, fontsize.group=8,
+                                          cex.group=1,
+                                          fill="grey20",
+                                          col="grey20")
+hic_granges <- make_granges_from_hic(contig="chr12",
+                                     start=4004176,
+                                     end=2*4273761 -4004176 ,
+                                     anchor = 4273761, 
+                                     resolution = 5,
+                                     base_path = "../data/HiC",
+                                     path_to_liftOver = c("/shared/sudlab1/General/mirror/ucsc/hg38/hg38ToHg19.over.chain",
+                                                          "/shared/sudlab1/General/mirror/ucsc/hg19/hg19ToHg38.over.chain"))
+hic_track = DataTrack(hic_granges, data="count", name="HiC", type="polygon", col.mountain="grey75", fill.mountain=c("grey75", "grey75"),
+                      ylim=c(0,400))
+pdf("../Figures/CCND2_hic.pdf", height=2, width=3.5, useDingbats = FALSE )
+plotTracks(c(hic_track, genes_track, GenomeAxisTrack()),
+              chromosome="chr12", from=4074176, to=2*4273761 -4004176, 
+              background.title="white", col.title="black", fontcolor.title="black",
+              cex.title=0.8,
+              showAxis=FALSE, 
+              fontface.title=1,
+              fontsize=9,
+              rotation.title=0
+   ) 
+dev.off()
+```
+
+
+```{r}
+hilo <- data.frame(sample_id=c("A26.13","A26.15B","A24.11", "A27.12", "A26.1", "A24.4", "A26.6B", "A17.9"),
+                   ccnd2=c(0.4, 0.02, 0.22, 0.16, 261,124,94,75),
+                   hilo = c(rep("low", 4), rep("high",4)),
+                   alpha = c(rep("grey50", 4), rep(cbbPalette["HD"],4)),
+                   stringsAsFactors = FALSE)
+hilo = hilo[rev(order(hilo$ccnd2)),]
+alpha_key = hilo$alpha
+names(alpha_key)= hilo$sample_id
+make_hilo_track <- function(x) {
+  
+track <- DataTrack(paste0("../data/signals/atac/",x,".treat_pileup.bw"),
+            type="polygon",
+            col.mountain=NA,
+            fill.mountain=c(alpha_key[x],alpha_key[x]),
+            
+            ylim=c(0,2),
+            name="",
+)
+return(track)
+}
+
+hilo_tracks <- sapply(hilo$sample_id, make_hilo_track)
+
+```
+
+```{r}
+hic_granges <- make_granges_from_hic(contig="chr12",
+                                     start=4004176,
+                                     end=4400000,
+                                     anchor = 4273761, 
+                                     resolution = 5,
+                                     base_path = "../data/HiC",
+                                     path_to_liftOver = c("/shared/sudlab1/General/mirror/ucsc/hg38/hg38ToHg19.over.chain",
+                                                          "/shared/sudlab1/General/mirror/ucsc/hg19/hg19ToHg38.over.chain"))
+hic_track = DataTrack(hic_granges, data="count", name="HiC", type="polygon", col.mountain="grey75", fill.mountain=c("grey75", "grey75"),
+                      ylim=c(0,400))
+
+```
+
+```{r, fig.height=3, fig.width=4}
+ seqlevelsStyle(EnsDb.Hsapiens.v86) <- "UCSC"
+   genes_track <- GeneRegionTrack(getGeneRegionTrackForGviz(EnsDb.Hsapiens.v86, chr="chr12", start=4004176, end=2*4273761 -4004176),
+                                          transcriptAnnotation="symbol", collapseTranscripts="meta", name=NULL, fontsize.group=8,
+                                          cex.group=1,
+                                          fill="grey20",
+                                          col="grey20")
+pdf("../Figures/CCND2_HD_HiLo.pdf", height=3, width=4, useDingbats = FALSE )
+   plotTracks(c(hic_track, hilo_tracks, genes_track, GenomeAxisTrack()),
+              chromosome="chr12", from=4074176, to=4289000, 
+              background.title="white", col.title="black", fontcolor.title="black",
+              cex.title=0.8,
+              showAxis=FALSE, 
+              fontface.title=1,
+              fontsize=9,
+              rotation.title=0,
+              sizes=c(1.5, rep(1,8), 2, 1.5)
+   ) 
+dev.off()
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.

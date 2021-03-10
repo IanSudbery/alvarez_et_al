@@ -1,0 +1,324 @@
+---
+title: "Figure 1 plots"
+output: html_notebook
+---
+
+Latent factor plots. 
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+cbbPalette =  c("CD19+ NPC"="#000000", "MAF"="#E69F00", "CCND1"="#56B4E9", "MMSET"="#009E73",  
+                "CD19- NPC"="grey40", "HD"="#0072B2", "UNKNOWN"="#CC79A7", "0"="white")
+sample_table <- read.delim("data/subgroup_atac_coldata.tsv.gz", stringsAsFactors=F, row.names = 1)
+sample_table$sample_id <- rownames(sample_table) 
+sample_table$condition[sample_table$condition=="ND"] <- sample_table$cd19[sample_table$condition=="ND"]
+sample_table <- sample_table %>%
+  mutate(sample_id = sub(",", ".", sample_id),
+         condition = sub("plus", "CD19+ NPC", condition),
+         condition = sub("minus", "CD19- NPC", condition))
+
+LF_data <- read.delim("phd_data/MOFA/samples_LFs_weights_matrix.tsv.gz", stringsAsFactors = F)
+LF_data <- LF_data %>% extract(sample, c("subtype", "sample_code"), regex="(.+)_([0-9]+c?\\.[0-9]+.*)", remove=F) %>%
+  left_join(select(sample_table, sample_id, condition), by=c("sample_code"="sample_id")) %>%
+  mutate(condition = replace_na(condition, "UNKNOWN"))
+
+LF2_vs <- LF_data %>%
+#  filter(factor %in% paste0("LF", 1:5)) %>%
+  spread(factor, value) %>%
+  gather(key="factor", value="value", -LF2, -condition, -sample_code, -subtype, -sample)
+```
+
+
+```{r, fig.width=16, fig.height=2}
+LF2_vs %>%
+  group_by(factor) %>%
+#  mutate(value=rank(value), LF2=rank(LF2)) %>%
+  ungroup() %>%
+ggplot() + 
+  aes(x=value, y=LF2, color=condition) +
+  geom_point(pch=19, size=1.5) +
+  facet_grid(~factor, scale="free_x") +
+  theme_bw(base_size=9) +
+  scale_color_manual(values=cbbPalette, name=NULL, guide=F) +
+  theme(aspect.ratio=1,
+        strip.background = element_blank(),
+        strip.text=element_text(size=10),
+        axis.title.y = element_text(size=9)) +
+  xlab(NULL) -> g3
+
+ggsave("Figures/Figure1d.png", width=4, height=2, dpi=300)
+print(g3)
+```
+
+```{r, fig.width=1.5, fig.height=1.5}
+LF2_vs %>%
+  filter(factor=="LF5", subtype != "MAF") %>%
+  ggplot() + 
+  aes(x=value, y=LF2, color=condition) +
+  geom_point(pch=19, size=1.5) +
+  facet_grid(~factor, scale="free_x") +
+  theme_bw(base_size=9) +
+  scale_color_manual(values=cbbPalette, name=NULL, guide=F) +
+  theme(aspect.ratio=1,
+        strip.background = element_blank(),
+        strip.text=element_text(size=10),
+        axis.title.y = element_text(size=9)) +
+  xlab(NULL)
+```
+
+A supplimentary figure to show that the HD samples with a high LF5 score are CCND2 high:
+
+```{r,  fig.width=3, fig.height=3}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+CCND_IDs = data.frame(gene_name = c("CCND2", "CCND1", "MAF", "MMSET"), gene_id =  c("ENSG00000118971", "ENSG00000110092", "ENSG00000178573", 	
+"ENSG00000109685"))
+ccnd_samples <- read.delim("data/rlog_batch_correct_rna_counts_for_all_samples.tsv.gz") %>% 
+  dplyr::filter(id %in%CCND_IDs$gene_id)
+sample_info <- read.delim("data/Samples.txt")
+
+ccnd_samples %>%
+  inner_join(CCND_IDs, by = c("id" = "gene_id")) %>% 
+  dplyr::select(-id) %>%
+  gather("Sample", "expression", -gene_name) %>%
+  spread(key=gene_name, value=expression) %>%
+  extract(Sample, into = c("subtype","Sample"), regex="(.+)_(RS_.+)") %>%
+  left_join(dplyr::select(sample_info, RNA.sample.code, ATAC.sample.code), by=c("Sample"="RNA.sample.code")) %>%
+  mutate(ATAC.sample.code=sub("A","",ATAC.sample.code)) %>%
+  filter(ATAC.sample.code != "26.20") %>%
+  mutate(ATAC.sample.code = ifelse(ATAC.sample.code == "26.18", "26.18.26.20", ATAC.sample.code))-> CCND_levels
+
+
+bin_model <- glm(value ~ MAF + CCND1, data=LF2_vs %>%
+  inner_join(dplyr::select(CCND_levels, ATAC.sample.code, CCND1, CCND2, MAF, MMSET), by=c("sample_code"="ATAC.sample.code")) %>%
+#  filter(factor=="LF5") %>%
+   filter( factor=="LF5") %>%
+  mutate(CCND_diff = CCND1-CCND2,
+         value = (rank(value)) / (length(value)) ),
+  family="binomial")
+
+anova(bin_model, test="Chisq")
+
+
+cor.test(~rank(value) + CCND1, data = LF2_vs %>%
+   inner_join(dplyr::select(CCND_levels, ATAC.sample.code, CCND1, CCND2, MAF, MMSET), by=c("sample_code"="ATAC.sample.code")) %>%
+   filter( factor=="LF5") %>%
+   mutate(CCND_diff = scale(MAF) - scale(CCND1)),
+   )
+         
+         
+         
+LF2_vs %>%
+  inner_join(dplyr::select(CCND_levels, ATAC.sample.code, CCND1, CCND2, MAF, MMSET), by=c("sample_code"="ATAC.sample.code")) %>%
+#  filter(factor=="LF5") %>%
+   filter(subtype != "MAF",  factor=="LF5") %>%
+  mutate(modlog=sign(value) * log(abs(value) +1 ) ) %>% head()
+ # filter(subtype %in% c("HD", "MM_OTHER"), factor=="LF5") %>%
+  ggplot() + 
+  aes(x=CCND2 - CCND1, y=value, color=condition) +
+  geom_point(pch=19, size=1.5) +
+  #facet_grid(~factor, scale="free_x") +
+  theme_bw(base_size=9) +
+  scale_color_manual(values=cbbPalette, name=NULL, guide=F) +
+  theme(aspect.ratio=1,
+        strip.background = element_blank(),
+        strip.text=element_text(size=10),
+        axis.title.y = element_text(size=9)) + ylab("LF5 rank") 
+#ggsave("Figures/rebuttal_fig1.png", g, height=1.5, width=1.5, units="in", dpi=300)
+
+print(g)
+
+
+```
+
+```{r, fig.width=2, fig.height=1.5}
+LF2_vs %>%
+  inner_join(dplyr::select(CCND_levels, ATAC.sample.code, CCND1, CCND2, MAF), by=c("sample_code"="ATAC.sample.code")) %>%
+  filter(factor=="LF5", !subtype %in% c("MAF")) %>%
+  ggplot() +
+  aes(x=reorder(sample, value), y=value, fill=condition) +
+  geom_bar(stat="identity") +
+  theme_bw(base_size=9) +
+  scale_fill_manual(values=cbbPalette, name=NULL, guide=F) +
+  scale_x_discrete(labels=NULL, name="MM patients", breaks=NULL ) +
+  ylab("LF5") +
+  theme(strip.background = element_blank(),
+        strip.text=element_text(size=10),
+        axis.title.y = element_text(size=9)) -> g
+#ggsave("Figures/rebuttal_figure2.png", g, width=2, height=1.5, units="in")
+print (g)
+```
+
+```{r}
+LFCs_data <- read.delim("data/collapsed_PC_analysis/MM_subgroup_PC_consensus_peaks_lfcs.tsv.gz", stringsAsFactors = F) %>%
+  select(id, padj=padj_LRT, starts_with("log2FoldChange") ) %>%
+  gather(subtype, log2FoldChange, starts_with("log2FoldChange")) %>%
+  extract(subtype, "subtype", regex="log2FoldChange_(.+)_vs_ND") 
+
+
+```
+
+```{r, fig.height=3}
+LF_data %>%
+  spread(factor, value) %>% 
+  mutate(colour = cbbPalette[condition]) -> data3d
+
+data3d %>%
+  filter(subtype!="MAF") %>%
+  plot_ly(x= ~LF2, y=~LF5, z=~LF6,  width = 3*150, height=3*150 ) %>%
+  add_markers(color = ~condition, colors=cbbPalette,  showlegend=FALSE,  alpha_stroke=1.0, alpha=1) %>%
+  config(
+    toImageButtonOptions = list(
+      format = "png",
+      filename = "myplot",
+      width = 900,
+      height = 900
+    )
+  ) 
+
+htmlwidgets::saveWidget(p,  "/shared/sudlab1/General/projects/PC_MM_Atac_seq/ians/Figures/scatter3d.html")
+```
+
+```{r}
+scatterplot3d(x=data3d$LF2, y=data3d$LF3, z=data3d$LF5, color = data3d$colour, pch=20, cex.symbols=2, angle=45, xlab="LF2", ylab="LF3", zlab="LF5")
+```
+```{r}
+LF_data %>%
+  dplyr::filter(factor %in% c("LF2", "LF3", "LF5")) %>%
+  dplyr::select(sample, factor, value) %>%
+  inner_join(
+    filter(LF_data, factor %in% c("LF2", "LF3", "LF5", "LF6")),
+    by = c("sample" = "sample")
+  ) %>%
+  filter(subtype != "PC") %>%
+  ggplot() +
+  aes(x = value.x, y = value.y, col = condition) +
+  geom_point(pch=19, size=1.5) +
+  facet_grid(factor.y ~ factor.x, scales="free") + 
+  theme_bw(base_size=9) +
+  scale_color_manual(values=cbbPalette, name=NULL, guide=F) +
+  theme(aspect.ratio=1,
+        strip.background = element_blank(),
+        strip.text=element_text(size=10),
+        axis.title.y = element_text(size=9)) +
+  xlab(NULL) 
+
+```
+
+
+```{r, fig.width=3, fig.height=2}
+ggplot(LFCs_data) +
+  aes(log2FoldChange, fill=subtype) +
+  geom_histogram(bins=60) +
+  facet_wrap(~subtype, ncol=2) +
+  scale_fill_manual(values=cbbPalette, guide=F) +
+  theme_bw(base_size=9) + 
+  coord_cartesian(xlim=c(-3.5,3.5)) +
+  geom_vline(xintercept = c(0), lty=2, col= "grey25") +
+  geom_vline(xintercept = c(-1,1), lty=2, col= "grey60") +
+ # scale_alpha_manual(values=c(0.4,1), guide=F) +
+  xlab(expression(paste(log[2], " Fold Change"))) + 
+  scale_y_continuous(labels = function(x) x/10000, name = NULL) + 
+  theme(
+        strip.background = element_blank(),
+        strip.text=element_text(size=8),
+     #   axis.title.y = element_text(size=8),
+        axis.text=element_text(size=8)) -> g2
+print(g2)
+```
+
+
+```{r, fig.height=2.5}
+pan_lfcs <- read.delim("data/collapsed_PC_analysis/MM_PC_consensus_peaks_lfcs.tsv.gz", stringsAsFactors = F)
+
+ggplot(pan_lfcs) +
+  aes(x=log2FoldChange) +
+  geom_histogram() +
+  scale_y_continuous(labels = function(x) x/10000, name = expression(paste("count ", (10^5)))) + 
+  theme(aspect.ratio=1,
+        strip.background = element_blank(),
+        strip.text=element_text(size=8),
+     #   axis.title.y = element_text(size=8),
+        axis.text=element_text(size=8)) 
+```
+
+```{r, fig.width=2.5, fig.height=2}
+ggplot(pan_lfcs) +
+  aes(x=log2FoldChange) +
+  geom_histogram(alpha=0.8) +
+  theme_bw(base_size=9) + 
+  scale_y_continuous(labels = function(x) x/10000, name = expression(paste("count ", (10^5)))) + 
+  coord_cartesian(xlim=c(-4, 4)) +
+  geom_vline(xintercept = c(0), lty=2, col= "grey25") +
+  geom_vline(xintercept = c(-1,1), lty=2, col= "grey60") +
+  xlab(expression(paste(log[2], " Fold Change"))) + 
+  scale_alpha_manual(values=c(0.4,1), guide=F) +
+  theme(
+        strip.background = element_blank(),
+        strip.text=element_text(size=8),
+     #   axis.title.y = element_text(size=8),
+        axis.text=element_text(size=8)) -> g1
+print(g1)
+```
+
+```{r, fig.height=1.75, fig.width=3.2}
+library(patchwork)
+g <- g1+g2
+ggsave("Figures/Figure1B.png", g, width=4, height=1.75, dpi=300)
+print(g)
+```
+
+```{r}
+
+(g1|g2) / g3 
+```
+
+Finally, we need the variance explained heatmap.
+
+```{r, fig.height=1, fig.width=4}
+library(MOFA)
+library(ComplexHeatmap)
+mofa <- loadModel("MOFA/MOFA.hdf5")
+var_explained <- calculateVarianceExplained(mofa)
+row_anno = rowAnnotation("Total explained"=anno_barplot(var_explained$R2Total,
+                                             border=FALSE,
+                                             bar_width=0.8,
+                                             gp=gpar(fill="deepskyblue4",
+                                                     col=NA),
+                                             axis_param = list(gp=gpar(fontsize=8),
+                                                             
+                                                               at=c(0,0.25,0.5,0.75))),
+                          width=unit(0.7, "inch"),
+                          gap=unit(0.3, "inch"),
+                          annotation_name_gp=gpar(fontsize=8),
+                          annotation_name_rot=00)
+col_anno <- HeatmapAnnotation("Cumulative Factor Explained"=anno_lines(cumsum(rowSums(var_explained$R2PerFactor)),
+                                                              gp=gpar(col="deepskyblue4",
+                                                                      lwt=2),
+                                                            border=FALSE,
+                                                            ylim=c(0,1.5),
+                                                            axis_param=list(at=c(0,0.5, 1,1.5))),
+                              annotation_name_gp=gpar(fontsize=8))
+
+png("Figures/Figure1E_var_explained.png", width=4, height=1, units = "in", res=300)
+Heatmap(t(var_explained$R2PerFactor), 
+        cluster_columns = FALSE, 
+        cluster_rows = FALSE,
+        col=circlize::colorRamp2(c(0,0.5), c("grey97", "darkblue")),
+        column_names_gp = gpar(fontsize=8),
+        row_names_gp = gpar(fontsize=8),
+        heatmap_legend_param = list(title=NULL, labels_gp=gpar(fontsize=8)),
+        right_annotation = row_anno,
+        rect_gp=gpar(col="grey50"))
+dev.off()
+```
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.

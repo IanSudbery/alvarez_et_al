@@ -1,0 +1,127 @@
+---
+title: "Getting/Updating the enrichR genesets"
+output: html_notebook
+---
+
+Run this notebook when you want to get/update the enrichR. It requires the `enrichr` package to be installed, which usefully does not contain the genesets, but does contain a function to look up their names allowing us to get them. When you want to update the database, simply call this notebook. 
+```{r}
+library(enrichR)
+library(RCurl)
+dbs <- enrichR::listEnrichrDbs()
+print(paste("Got",nrow(dbs), "databases. These are"))
+dbs
+
+```
+
+```{r}
+library(RCurl)
+library(dplyr)
+getdb <- function(db_name) {
+  url <- paste0("https://amp.pharm.mssm.edu/Enrichr/geneSetLibrary?mode=text&libraryName=", db_name)
+  response <- getURL(url)
+  lines <- unlist(strsplit(response, "\n"))
+  genesets <- strsplit(lines, "\t")
+  geneset_names <- sapply(genesets, `[`, 1)
+  genesets <- sapply(genesets, `[`, c(-1,-2), simplify=FALSE)
+  
+  names(genesets) <- geneset_names
+  genesets <- sapply(geneset_names, 
+                     function(x) data.frame(gene_symbol=as.character(genesets[[x]]), stringsAsFactors = FALSE), 
+                     simplify = FALSE)
+  genesets <- bind_rows(genesets, .id="gene_set") 
+  Sys.sleep(10)
+  return(genesets)
+}
+
+all_dbs <- sapply(dbs$libraryName, getdb, simplify = FALSE)
+```
+
+This is a very large download. Lets turn it into a single, large dataframe. The summary that follows this computation shows the number of symbols and ensembl ids per gene set on average for each category, and the conversion failure and duplication rates. This table should be checked to ensure that nothing has gone wrong with the processing. 
+
+```{r}
+library(biomaRt)
+#dbs_df <- bind_rows(all_dbs, .id="gs_cat") %>%
+#  mutate(gene_symbol = sub(",.+", "", gene_symbol))
+ensembl = useMart("ensembl")
+datasets <- useDataset("hsapiens_gene_ensembl",mart=ensembl)
+
+symbol2geneid <- na.omit(getBM(attributes = c("ensembl_gene_id", "hgnc_symbol"), mart=datasets)) %>%
+  filter(hgnc_symbol != "")
+
+dbs_df <- lapply(all_dbs, function(x) x %>%
+                     filter(gene_symbol != "") %>%
+                     mutate(gene_symbol = sub(",.+","", gene_symbol)) %>%
+                     left_join(symbol2geneid, by=c("gene_symbol"="hgnc_symbol"))) %>%
+  bind_rows(.id="gs_cat")
+```
+
+```{r}
+geneset_info <- dbs_df %>%
+  group_by(gs_cat, gene_set) %>%
+  summarise(n_symbols = n_distinct(gene_symbol),
+            n_ensembl_ids = n_distinct(ensembl_gene_id),
+            n_failed_convert = sum(is.na(ensembl_gene_id)),
+            n_duplicated = sum(table(gene_symbol) > 1))
+
+geneset_info %>%
+  group_by(gs_cat) %>%
+  summarise(genesets=n(),
+            symbols_per_set = mean(n_symbols),
+            ensembl_ids_per_set = mean(n_ensembl_ids),
+            conversion_failure = scales::percent(mean(n_failed_convert/n_symbols)),
+            duplication = scales::percent(mean(n_duplicated/n_ensembl_ids)))
+```
+
+Many of the genesets from different categories have the same name, and so a unique identifier must be created. 
+
+```{r}
+geneset_info <- geneset_info %>%
+  mutate(geneset_id = as.character(paste0("enrichr_",1:n())))
+dbs_df %>%
+  inner_join(dplyr::select(geneset_info, gs_cat, gene_set, geneset_id),
+            by=c("gs_cat", "gene_set"))  -> dbs_df
+```
+
+This complete table will be output for future usage:
+
+```{r}
+write.table(dbs_df, gzfile("enrichr_pathway_assigments.tsv.gz"), row.names=FALSE, quote=FALSE, sep = "\t")
+write.table(geneset_info, gzfile("enrichr_geneset_info.tsv.gz"), row.names=FALSE, quote=FALSE, sep = "\t")
+
+library(RSQLite)
+
+db <- dbConnect(SQLite(), "enrichr.sqlite")
+dbWriteTable(db, "genecats", dbs_df, overwrite=TRUE)
+dbWriteTable(db, geneset_info, geneset_info, overwrite=TRUE)
+```
+
+Now output "default" sets to R objects, together with the info dataframe in the format ready for use by goseq, which is a list of gene_ids with each list entry containing the pathways that gene is a member of. This can be produced by the `filter_and_process_genesets` function. 
+
+```{r}
+source("enrichr.R")
+library(tidyr)
+dbs %>%
+  extract(libraryName, "(.+)(20[0-9]{2}.*)", into=c("cat", "year"), remove=FALSE ) %>%
+  arrange(cat, year) %>%
+  group_by(cat) %>%
+  filter(is.na(year) | year==max(year)) %>%
+  ungroup() %>%
+  filter(!grepl("[mM]ouse", libraryName),
+         !grepl("NIH", libraryName),
+         !grepl("Enrichr", libraryName)) -> filtered_libraries
+
+genecats_ensembl <- filter_and_process_genesets(dbs_df, geneset_categories = filtered_libraries$libraryName)
+save(genecats_ensembl, geneset_info, file="enrichr_genesets_ensembl.RData")
+rm(genecats_ensembl)
+gc()
+```
+
+And the object indexed by symbols rather than gene_ids
+
+```{r}
+genecats_symbol <- filter_and_process_genesets(dbs_df, geneset_categories = filtered_libraries$libraryName, id_type = "gene_symbol")
+save(genecats_symbol, geneset_info, file="enrichr_genesets_symbol.RData")
+rm(genecats_symbol)
+gc()
+```
+

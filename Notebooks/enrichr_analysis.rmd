@@ -1,0 +1,317 @@
+---
+title: "Gene/Pathway Enrichment of enhancer regulated genes"
+output: html_notebook
+---
+
+Properly controlled enribiochment analysis. We will do three tests. Pathways enriched in DE gene, pathways enriched in DE genes with DE enhnacers, and pathways enriched in DE genes with DE enhancers compared to all DE genes. For this we will use the subtype genes and enhancers
+
+```{r}
+library(msigdbr)
+library(goseq)
+library(dplyr)
+library(ggplot2)
+library(org.Hs.eg.db)
+library(RSQLite)
+enhancers <- read.delim("../data/new_subgroup_MM_vs_PC_DE_ATAC_DE_RNA_1Mb.tsv.gz",
+                              stringsAsFactors = FALSE)
+de_genes <- read.delim("../data/new_subgroup_MM_vs_PC_all_DE_genes_all_cond.tsv.gz", 
+                       stringsAsFactors = FALSE) %>%
+  mutate(DE_HD_vs_ND = !is.na(padj) & padj<0.1 & abs(log2FoldChange_HD_vs_ND) > 1.5,
+         DE_CCND1_vs_ND = !is.na(padj) & padj<0.1 & abs(log2FoldChange_CCND1_vs_ND) > 1.5,
+         DE_MAF_vs_ND = !is.na(padj) & padj<0.1 & abs(log2FoldChange_MAF_vs_ND) > 1.5,
+         DE_MMSET_vs_ND = !is.na(padj) & padj<0.1 & abs(log2FoldChange_MMSET_vs_ND) > 1.5) %>%
+  rowwise() %>%
+  mutate(sig = as.numeric(!is.na(padj) & 
+                            padj < 0.1 & 
+                            any(DE_HD_vs_ND ==1, 
+                                DE_CCND1_vs_ND==1,
+                                DE_MAF_vs_ND == 1,
+                                DE_MMSET_vs_ND == 1)))
+
+```
+
+# Pathways in DE genes
+
+In this test, regions are ignored and we just get the enriched pathways for the DE genes
+
+```{r}
+de_genes_sig <- de_genes$sig
+names(de_genes_sig) <- de_genes$id
+de_pwf <- nullp(de_genes_sig, "hg38", "ensGene")
+de_pwf <- na.omit(de_pwf)
+de_genes <- filter(de_genes, id %in% rownames(de_pwf))
+```
+
+```{r}
+source("/shared/sudlab1/General/mirror/gene_sets/enrichr/enrichr.R")
+enrichr_db <- "/shared/sudlab1/General/mirror/gene_sets/enrichr/csvdb"
+de_genes_enriched_pathways <- run_goseq_on_enrichr_cats(de_pwf, database = enrichr_db)
+```
+
+
+```{r}
+table(padj = de_genes_enriched_pathways$FDR < 0.01, enrichment =  de_genes_enriched_pathways$enrichment > 2)
+```
+
+```{r}
+de_genes_enriched_pathways %>%
+  filter(FDR < 0.01, enrichment > 3) %>%
+  arrange(gs_cat, desc(enrichment)) %>%
+  filter(grepl("GO_Biological", gs_cat)) %>%
+  group_by(category) %>%
+  summarise(n=n()) %>%
+  arrange(desc(n))
+
+```
+
+# Pathways enriched in enhancer linked genes
+
+```{r}
+library(tidyr)
+enhanced_genes <- enhancers%>%
+  mutate(sig = as.numeric(!is.na(RNA_padj) &
+                            RNA_padj < 0.1 &
+                            any(RNA_DE_HD_vs_ND == 1,
+                                RNA_DE_CCND1_vs_ND == 1,
+                                RNA_DE_MMSET_vs_ND == 1,
+                                RNA_DE_MAF_vs_ND==1))) %>%
+  filter(gene_id  %in% rownames(de_pwf)) %>%
+  group_by(gene_id) %>%
+  summarize(sig= max(sig))
+
+enhanced_genes <- de_genes %>%
+  dplyr::select(id) %>%
+  left_join(enhanced_genes, by=c("id"="gene_id")  ) %>%
+  mutate(sig=replace_na(sig, replace = 0))
+enhanced_gene_sig <- enhanced_genes$sig
+names(enhanced_gene_sig) <- enhanced_genes$id
+
+enhanced_pwf <- nullp(enhanced_gene_sig, genome="hg38", id = "ensGene")
+
+```
+
+```{r}
+enhanced_pathways <- run_goseq_on_enrichr_cats(enhanced_pwf, enrichr_db)
+
+print(table(padj = enhanced_pathways$FDR < 0.01, enrichment =  enhanced_pathways$enrichment > 2))
+enhanced_pathways %>% 
+  filter(FDR < 0.01, enrichment > 3, numInCat > 10) %>%
+  arrange(desc(enrichment)) %>%
+  dplyr::select(gs_cat, category, numDEInCat, numInCat, FDR, enrichment) %>%
+  filter(!grepl("[mM]ouse|NIH|enrichr|GeneSigDB|MSigDB|LINCS", gs_cat)) -> t
+write.table(t, "../data/gene_sets/enrichr_pathways_enhanced_genes_over_genome.tsv", sep="\t", row.names = FALSE, quote = FALSE)
+t %>% 
+  mutate(gs_cat = substr(gs_cat, 1, 30),
+         category = substr(category, 1, 65))
+```
+
+Becuase the LINCs categories are so big, I left them out of the last table, and will put them in their own file. The LINCs categories comre from this website: www.clue.io
+
+```{r}
+
+enhanced_pathways %>% 
+  filter(FDR < 0.01, enrichment > 3, numInCat > 10) %>%
+  filter(grepl("LINC", gs_cat))  %>%
+  arrange(desc(enrichment)) %>%
+  dplyr::select(gs_cat,category, numDEInCat, numInCat, FDR, enrichment) -> t
+write.table(t, "../data/gene_sets/LINCs_pertubations_enhanced_genes_over_genome.tsv", sep="\t", row.names = FALSE, quote = FALSE)
+t %>%   mutate(gs_cat = substr(gs_cat, 1, 30),
+         category = substr(category, 1, 65))
+```
+
+
+
+```{r, fig.width=12, fig.height=12}
+enhanced_pathways %>% filter(FDR < 0.01,
+                             OR>3,
+                             numInCat>10) %>%
+  arrange(desc(OR)) %>%
+  filter(!grepl("[mM]ouse|NIH|enrichr|GeneSigDB|MSigDB|LINCS", gs_cat)) %>%
+  mutate(gs_cat = sub("_20[0-9]{2}[a-z]?$", "", gs_cat)) %>%
+  group_by(gs_cat)%>%
+  mutate(n_in_gs_cat = n()) %>%
+  ungroup() %>%
+  mutate(gs_cat = ifelse(n_in_gs_cat>4, gs_cat, "other")) %>%
+  group_by(gs_cat) %>%
+  dplyr::slice(1:10) %>%
+  ungroup() %>%
+  ggplot() + 
+  aes(x=reorder(category, OR), y= OR, col=-log10(FDR)) +
+  geom_point(size=2.5) +
+  coord_flip() +
+  theme_bw(base_size=8) + 
+  scale_x_discrete(labels=function(x) substr(x, 1, 35), name=NULL) +
+  scale_y_continuous(limits=c(1,NA), trans="log2", name="Odds Ratio") +
+  facet_wrap(~gs_cat, scale="free_y", nrow = 6) -> g
+
+ggsave("../Figures/enrichr_pathways_enhanced_genes_over_genome.png",g,  width=12, height=12, units="in", dpi=300)
+print(g)
+
+
+```
+
+
+# Enrichment over differentially ezpressed genes
+
+```{r}
+enhanced_de_genes <- de_genes %>%
+  filter(sig==1) %>%
+  dplyr::select(id) %>%
+  left_join(enhanced_genes, by=c("id"="id")) %>%
+  dplyr::select(id, sig)
+enhanced_de_genes_sig <- enhanced_de_genes$sig
+names(enhanced_de_genes_sig) <-
+   enhanced_de_genes$id
+enhanced_de_pwf <- nullp(enhanced_de_genes_sig, genome="hg38", id="ensGene")
+```
+
+```{r}
+ enhanced_de_pathways <- run_goseq_on_enrichr_cats(enhanced_de_pwf, enrichr_db)
+
+table(padj = enhanced_de_pathways$FDR < 0.1, enrichment =  enhanced_de_pathways$enrichment > 2)
+```
+
+
+Still not a very high enrichements. I guess this is because of the high number of DE genes with OE enhancers?
+
+```{r}
+sum(enhanced_de_pwf$DEgenes)/length(enhanced_de_pwf$DEgenes)
+```
+
+Hard to be more than 2x enriched when 50% of genes are in the positive set. Probably ORs would have been better. 
+...TODO: add OR calculation the enrichr code
+
+```{r}
+enhanced_de_pathways %>%
+  filter(FDR < 0.01) %>%
+  arrange(desc(enrichment)) %>%
+  dplyr::select(gs_cat, category, numDEInCat, numInCat, FDR, enrichment) %>%
+  filter(!grepl("[mM]ouse|NIH|enrichr|GeneSigDB|MSigDB|LINCS", gs_cat)) -> t
+
+write.table(t, "../data/gene_sets/enrichr_pathways_enhanced_genes_over_de_genes.tsv", sep="\t", row.names=FALSE, quote=FALSE)
+t %>%  mutate(gs_cat = substr(gs_cat, 1, 30),
+         category = substr(category, 1, 65))
+
+```
+
+
+```{r, fig.width=12, fig.height=8}
+library(ggplot2)
+enhanced_de_pathways %>% filter(FDR < 0.01) %>%
+  arrange(desc(OR)) %>%
+  mutate(gs_cat = sub("_20[0-9]{2}[a-z]?$", "", gs_cat)) %>%
+  group_by(gs_cat)%>%
+  mutate(n_in_gs_cat = n()) %>%
+  ungroup() %>%
+  mutate(gs_cat = ifelse(n_in_gs_cat>4, gs_cat, "other")) %>%
+  group_by(gs_cat)%>%
+  dplyr::slice(1:20) %>%
+  ungroup() %>%
+    ggplot() + 
+  aes(x=reorder(category, OR), y= OR, col=-log10(FDR)) +
+  geom_point(size=2.5) +
+  coord_flip() +
+  theme_bw(base_size=8) + 
+  scale_x_discrete(labels=function(x) substr(x, 1, 40), name=NULL) +
+  scale_y_continuous(limits=c(1,NA), trans="log2", name="Odds Ratio") +
+  facet_wrap(~gs_cat, scale="free_y") -> g
+
+print(g)
+ggsave("../Figures/enrichr_pathways_enhanced_genes_over_de_genes.png",g, width=12, height=8, units="in", dpi=300)
+
+```
+
+
+```{r}
+
+subtype_enh_genes <- function(subtype, de_genes, enhancers) {
+  
+  all_de_genes <- de_genes$id[de_genes$padj < 0.1 & de_genes[,paste0("DE_", subtype, "_vs_ND")] == 1]
+  enhanced <- as.numeric(all_de_genes %in% enhancers$gene_id[enhancers$RNA_padj < 0.1  & enhancers[,paste0("RNA_DE_", subtype, "_vs_ND")] == 1 ])
+  names(enhanced) <- all_de_genes
+  
+  pwf <- nullp(enhanced, genome="hg38", id = "ensGene", plot.fit=FALSE)
+  pathways <- run_goseq_on_enrichr_cats(pwf, enrichr_db)
+  return(pathways)
+}
+
+subtype_pathways <- sapply(c("MAF", "CCND1", "HD", "MMSET"), subtype_enh_genes, de_genes, enhancers, simplify = FALSE)
+```
+
+Summarizing the number of pathways per type per subcat:
+
+```{r}
+subtype_pathways_df <- bind_rows(subtype_pathways, .id="subtype")
+subtype_pathways_df %>%
+  filter(FDR < 0.01) %>%
+  group_by(subtype, gs_cat) %>%
+  summarize(significant_pathways = n_distinct(category))
+
+```
+
+Loads for MMSET, a far few for HD, some for CCND1, and interestingly, not very much for MAF. I wonder if this is because so many of the DE regions are MAF ones. Tassos was exicted to see a connection to Brain Tissue in the GTEX stuff when I just plugged it into Enrichr. I wonder what is going with that here? We havn't seen much in the way of that so far...
+
+```{r}
+subtype_pathways_df %>%
+  filter(FDR < 0.01, grepl("GTEx", gs_cat), !grepl("blood", category))
+
+```
+
+So it appears that there is some enrichment in brian up genes, but really, only in MMSET. 
+
+Output the tables:
+
+```{r}
+subtype_pathways_df %>%
+  filter(FDR < 0.01) %>%
+  arrange(desc(OR)) %>%
+  dplyr::select(subtype, gs_cat, category, numDEInCat, numInCat, FDR, OR)  -> t
+write.table(t, "../data/gene_sets/enrichr_pathways_enhanced_subtype_genes_over_de_genes.tsv",
+            sep="\t",
+            row.names=FALSE,
+            quote=FALSE)
+```
+
+And output one plot per subtype.
+
+```{r, fig.width=11, fig.height=8}
+plots_df <- subtype_pathways_df %>%
+  group_by(subtype) %>%
+  filter(FDR<0.01) %>%
+  arrange(desc(OR)) %>%
+ mutate(gs_cat = sub("_20[0-9]{2}[a-z]?$", "", gs_cat)) %>%
+  group_by(subtype, gs_cat)%>%
+  mutate(n_in_gs_cat = n()) %>%
+  ungroup() %>%
+  mutate(gs_cat = ifelse(n_in_gs_cat>4, gs_cat, "other")) %>%
+  group_by(subtype, gs_cat) %>%
+  dplyr::slice(1:20) %>%
+  ungroup() %>%
+  group_by(subtype) %>%
+  do(
+    plots=ggplot(.) + 
+    aes(x=reorder(category, OR), y= OR, col=-log10(FDR)) +
+    geom_point(size=2.5) +
+    coord_flip() +
+    theme_bw(base_size=8) + 
+    scale_x_discrete(labels=function(x) substr(x, 1, 40), name=NULL) +
+    scale_y_continuous(limits=c(1,NA), trans="log2", name="Odds Ratio") +
+    facet_wrap(~gs_cat, scale="free_y") +
+    ggtitle(.$subtype[1])
+  )
+apply(plots_df, 1, function(x) ggsave(paste0("../Figures/", x$subtype, "_enrichr_pathways_over_de_genes.png"), 
+                                          plot=x$plots,
+                                          width = 11,
+                                          height = 8,
+                                          dpi=300,
+                                      units="in"))
+plots_df$plots
+```
+
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.

@@ -1,0 +1,210 @@
+---
+title: "Plots of Luven super-enhacners"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+```{r, setup}
+library(GenomicRanges)
+library(rtracklayer)
+library(Gviz)
+library(EnsDb.Hsapiens.v86)
+library(tidyr)
+```
+
+```{r}
+download.file("https://www.cell.com/cms/10.1016/j.cell.2013.03.036/attachment/d14498e0-dbcf-4338-8c39-aeb557547e4b/mmc1.zip", destfile="../data/MM1.S.superenhnacers.hg18.bed.zip")
+unzip("../data/MM1.S.superenhnacers.hg18.bed.zip", exdir="../data/")
+file.rename("../data/cell_6823_mmc1.bed", "../data/MM1.S.superenhacers.hg18.bed")
+ch <- import.chain("/shared/sudlab1/General/mirror/ucsc/hg18/liftOver/hg18ToHg38.over.chain")
+super_enhancers_hg18 <- import(BEDFile("../data/MM1.S.superenhacers.hg18.bed"))
+super_enhancers_hg38 <- liftOver(super_enhancers_hg18$Super_MM1S_Enhancers, ch)
+```
+
+
+```{r}
+
+
+cbbPalette =  c("PC"="#000000", "MAF"="#E69F00", "CCND1"="#56B4E9", "MMSET"="#009E73", "#F0E442", 
+                "MM_OTHER"="grey75", "HD"="#0072B2", "#D55E00", "#CC79A7")
+ATAC_mm = sapply(c("MAF", "MMSET", "HD", "CCND1"), function(x) 
+  DataTrack(paste0("../data/signals/atac/", x,".treat_pileup.bw"),
+            type="polygon",
+            col.mountain=NA,
+            fill.mountain=c(cbbPalette[x],cbbPalette[x]),
+            ylim=c(0,4.2),
+            name=  x),
+  simplify=FALSE
+)
+
+ATAC_pc <- DataTrack("../data/signals/atac/PC.treat_pileup.bw",
+            type="polygon",
+            col.mountain=NA,
+            fill.mountain=c(cbbPalette["PC"],cbbPalette["PC"]),
+            ylim=c(0,4.2),
+            name="PC"
+)
+
+H3K27ac_files <- c(MAF="../data/signals/h3k27ac/JJN3_H3K27ac_FC.bw",
+                   MMSET="../data/signals/h3k27ac/NCI-H929.H3K27ac_ERR2570827..FC_over_Input_bin1.bw",
+                   CCND1="../data/signals/h3k27ac/U-266_c01.ERX297418.H3K27ac.bwa.GRCh38.20150528.bw")                   
+H3K27ac <- sapply(names(H3K27ac_files),
+                  function(x) {
+                   DataTrack(H3K27ac_files[x],
+                      type="polygon",
+                      col.mountain=NA,
+                      lwd.mountain=0.01,
+                      alpha=1,
+                      ylim=c(0,1200),
+                      name= x,
+                      fill.mountain=c(cbbPalette[x], cbbPalette[x]))
+                    },
+                  simplify = FALSE)
+super_enhancers_track <- AnnotationTrack(super_enhancers_hg38, name="Loven SEs")
+SE_call_files <- c(MAF="../data/super_enhnancers/Super_enhancers_Homer/MM1.H3K27ac_ERR2570844.SuperEnhancers.bed.fixed.bed",
+                   MMSET="../data/super_enhnancers/Super_enhancers_Homer/NCI-H929.H3K27ac_ERR2570827.SuperEnhancers.bed.fixed.bed",
+                   CCND1="../data/super_enhnancers/Super_enhancers_Homer/U266.H3K27ac_ERR2570833.SuperEnhancers.bed.fixed.bed")
+super_enhancer_CL <- import("../data/super_enhnancers/Super_enhancers_Homer/ALL_samples_H3K27ac_SuperEnhancers.bed.fixed.bed")
+super_enhancer_CL$name <- sub("\\.H3K.+", "", super_enhancer_CL$name)
+super_enhancer_CL$name <- sub("-", ".", super_enhancer_CL$name)
+CL_subtypes <- c(
+  "NCI.H929"=	"MMSET",
+  "OPM.2"=	"MMSET",
+  "RPMI8226"=	"MAF",
+  "MOLP.2"=	"MMSET",
+  "MOLP.8"=	"MM_OTHER",
+  "MM.1S"=	"MAF",
+  "LP.1"	="MMSET",
+  "EJM"	="MM_OTHER",
+  "KMS.12.BM"=	"CCND1",
+  "U266"=	"CCND1")
+super_enhancer_CL$name = CL_subtypes[super_enhancer_CL$name]
+super_enhancer_CL$name[is.na(super_enhancer_CL$name)] <- "MM_OTHER"
+super_enhancer_CL_track <- AnnotationTrack(super_enhancer_CL, name = "SE calls",
+                                           feature=super_enhancer_CL$name,
+                                           stacking="squish",
+                                           col=NULL
+                                           )
+displayPars(super_enhancer_CL_track) <- as.list(cbbPalette)
+# super_enhancers_tracks <- sapply(names(SE_call_files), 
+#                                  function(x) {
+#                                    SE_track <- import(SE_call_files[x])
+#                                    
+#                                    AnnotationTrack(SE_call_files[x],
+#                                                    name = paste0(x, " SE"),
+#                                                    fill=cbbPalette[x],
+#                                                    col=cbbPalette[x])
+#                                  },
+#                                  simplify=FALSE)
+# test <- import("../data/super_enhnancers/Super_enhancers_Homer/MM1.H3K27ac_ERR2570844.SuperEnhancers.bed.fixed.bed")
+```
+
+```{r, fig.width=5, fig.height=3}
+make_plot <- function(chr, start, end, ylim=4.2, k27_lim=100) {
+  seqlevelsStyle(EnsDb.Hsapiens.v86) <- "UCSC"
+  ATAC_mm = sapply(c("MAF", "MMSET", "HD", "CCND1"), function(x) 
+  DataTrack(paste0("../data/signals/atac/", x,".treat_pileup.bw"),
+            type="polygon",
+            col.mountain=NA,
+            fill.mountain=c(cbbPalette[x],cbbPalette[x]),
+            ylim=c(0,ylim),
+            name=  x),
+  simplify=FALSE
+  )
+
+   ATAC_pc <- DataTrack("../data/signals/atac/PC.treat_pileup.bw",
+            type="polygon",
+            col.mountain=NA,
+            fill.mountain=c(cbbPalette["PC"],cbbPalette["PC"]),
+            ylim=c(0,ylim),
+            name="PC"
+  )
+   H3K27ac <- sapply(names(H3K27ac_files),
+                  function(x) {
+                   DataTrack(H3K27ac_files[x],
+                      type="polygon",
+                      col.mountain=NA,
+                      lwd.mountain=0.01,
+                      alpha=1,
+                      ylim=c(0,k27_lim),
+                      name= x,
+                      fill.mountain=c(cbbPalette[x], cbbPalette[x]))
+                    },
+                  simplify = FALSE)
+  genes_track <- GeneRegionTrack(getGeneRegionTrackForGviz(EnsDb.Hsapiens.v86, chr=chr, start=start, end=end),
+                                          transcriptAnnotation="symbol", collapseTranscripts="meta", name=NULL, fontsize.group=8,
+                                          cex.group=1,
+                                          fill="grey20",
+                                          col="grey20")
+  track_list <- c(ATAC_mm,ATAC_pc, H3K27ac, super_enhancers_track, super_enhancer_CL_track, genes_track, GenomeAxisTrack())
+  track_heights = c(rep(0.7, length(ATAC_mm) + length(H3K27ac) + 1), 0.3, 1, 1.2, 1.2)
+  plotTracks(track_list,
+              chromosome=chr, from=start, to=end, 
+              background.title="white", col.title="black", fontcolor.title="black",
+              cex.title=0.8,
+              showAxis=FALSE, 
+              fontface.title=1,
+              fontsize=9,
+              rotation.title=0,
+              sizes=track_heights
+   ) 
+
+
+}
+
+pdf("../Figures/rebuttal_fig2a.pdf", width = 6, height=3, useDingbats = FALSE)
+make_plot(chr="chr12", start=4074176, end=4289000)
+dev.off()
+make_plot(chr="chr12", start=4074176, end=4289000)
+```
+
+
+## CCND1
+
+```{r, fig.width=2.5, fig.height=3}
+
+  seqlevelsStyle(EnsDb.Hsapiens.v86) <- "UCSC"
+ccnd1_locations <- genes(EnsDb.Hsapiens.v86,
+      filter = list(GeneNameFilter(unique("CCND1"))),
+      return.type="data.frame",
+      columns=c("seq_name", "gene_seq_start", "gene_name"))
+pdf("../Figures/rebuttal_fig2b.pdf", width = 2.5, height=3, useDingbats = FALSE)
+make_plot(chr=ccnd1_locations$seq_name, start=ccnd1_locations$gene_seq_start-50000, end=ccnd1_locations$gene_seq_start+50000, ylim=2)
+dev.off()
+make_plot(chr=ccnd1_locations$seq_name, start=ccnd1_locations$gene_seq_start-50000, end=ccnd1_locations$gene_seq_start+50000, ylim=2)
+```
+
+
+## MAF
+```{r, fig.width=2.5, fig.height=3}
+  seqlevelsStyle(EnsDb.Hsapiens.v86) <- "UCSC"
+maf_locations <- genes(EnsDb.Hsapiens.v86,
+      filter = list(GeneNameFilter(unique("MAF"))),
+      return.type="data.frame",
+      columns=c("seq_name", "gene_seq_start", "gene_name"))
+pdf("../Figures/rebuttal_fig2c.pdf", width = 2.5, height=3, useDingbats = FALSE)
+make_plot(chr=maf_locations$seq_name, start=maf_locations$gene_seq_start-50000, end=maf_locations$gene_seq_start+50000, ylim=2.3, k27_lim = 100)
+dev.off()
+make_plot(chr=maf_locations$seq_name, start=maf_locations$gene_seq_start-50000, end=maf_locations$gene_seq_start+50000, ylim=2.3, k27_lim = 100)
+```
+##MMSET
+
+```{r,  fig.width=2.5, fig.height=3}
+  seqlevelsStyle(EnsDb.Hsapiens.v86) <- "UCSC"
+nsd2_locations <- genes(EnsDb.Hsapiens.v86,
+      filter = list(GeneIdFilter( "ENSG00000109685")),
+      return.type="data.frame",
+      columns=c("seq_name", "gene_seq_start", "gene_name"))
+pdf("../Figures/rebuttal_fig2d.pdf", width = 2.5, height=3, useDingbats = FALSE)
+make_plot(chr=nsd2_locations$seq_name, start=nsd2_locations$gene_seq_start-75000, end=nsd2_locations$gene_seq_start+75000, ylim=5, k27_lim = 180)
+dev.off()
+make_plot(chr=nsd2_locations$seq_name, start=nsd2_locations$gene_seq_start-75000, end=nsd2_locations$gene_seq_start+75000, ylim=5, k27_lim = 180)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.

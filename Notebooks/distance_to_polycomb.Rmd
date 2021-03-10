@@ -1,0 +1,227 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+library(dplyr)
+library(ggplot2)
+sample_table <- read.delim("../data/chromHMM_samples.txt")
+distances <- read.delim("../finding_poly_distance/pan_MM_closest_merge.tsv", header=FALSE,
+                        col.names = c("sample", "chr", "start", "end", "distance"), stringsAsFactors = FALSE) %>%
+  inner_join(sample_table, by = c("sample"="Accession"))
+ggplot(distances) +
+  aes(x=Cell_type, y=distance+1)+
+  geom_boxplot() +
+  coord_flip() +
+  theme_bw() +
+  scale_y_log10()
+  
+```
+
+```{r}
+distances %>%
+  group_by(sample, Cell_type) %>%
+  summarise(median_distance=median(distance))%>%
+  ggplot() + aes(x=Cell_type, y=median_distance) %>%
+  geom_point() +
+  scale_y_log10() +
+  coord_flip() + 
+  theme_bw()
+
+```
+
+```{R}
+distances %>% 
+  group_by(Cell_type, chr, start, end) %>%
+  summarise(med =median(distance), perc_1kb = sum(distance<1000)*100/n()) %>%
+  arrange(Cell_type)
+```
+
+```{r}
+library(ggplot2)
+sample_table <- read.delim("../data/chromHMM_samples.txt")
+distances_sub <- read.delim("../finding_poly_distance/MM_subgroup_closest_merge.tsv", header=FALSE,
+                        col.names = c("sample", "chr", "start", "end", "distance")) %>%
+  inner_join(sample_table, by = c("sample"="Accession"))
+ggplot(distances) +
+  aes(x=Cell_type, y=distance+1)+
+  geom_boxplot() +
+  coord_flip() +
+  theme_bw() +
+  scale_y_log10()
+
+```
+
+```{r}
+distances %>%
+  group_by(sample, Cell_type) %>%
+  summarise(median_distance=median(distance))%>%
+  ggplot() + aes(x=Cell_type, y=median_distance) %>%
+  geom_point() +
+  scale_y_log10() +
+  coord_flip() + 
+  theme_bw()
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+distances %>%
+  ggplot() + aes(x=distance+1, color = Cell_type) +
+  stat_ecdf() +
+  scale_x_log10()
+
+distances%>%
+  group_by(Cell_type, sample) %>%
+  summarise(f=sum(distance==0)/n())
+```
+
+
+```{r}
+enhancer_class <- read.delim("../data/pan_enhancer_development_class.tsv.tsv", stringsAsFactors = FALSE) %>%
+  select(chr, start, end, Category) 
+
+distances_with_class = distances %>%
+  transform(start = floor(start/200)*200, end= ceiling(end/200)*200) %>%
+  inner_join(enhancer_class)
+
+distances_with_class %>%
+  filter(Cell_type %in% c("class switched memory B cell", "gernminal center B cell")) %>%
+  group_by(chr, start, end, Category) %>%
+  summarise(close = min(distance) < 1000) %>%
+  group_by(close, Category) %>%
+  summarise(count = n()) %>%
+  ungroup() %>%
+  group_by(close) %>%
+  mutate(f_cat = count/sum(count)) %>%
+  ggplot() +
+  aes(x=Category, y= f_cat, fill=close) +
+  geom_bar(position="dodge", stat="identity") +
+  theme_bw() +
+  theme(axis.text.x=element_text(angle=90))
+
+```
+
+```{r}
+gene_region_association <- read.delim("../data/pan_MM_differential_genes_regulated_differential_enhancers.bed", stringsAsFactors = FALSE)
+
+gene_region_association %>%
+  select(chr, start, end, gene_id, SYMBOL) %>%
+  inner_join(distances) -> distances_with_genes
+
+
+distances_with_genes %>%
+  filter(Cell_type %in% c("class switched memory B cell", "gernminal center B cell")) %>%
+  group_by(gene_id) %>%
+  summarize(close=min(distance)) %>%
+  mutate(close=ifelse(close<1000, 1, 0)) -> close_genes
+
+distances_with_genes %>%
+  filter(Cell_type %in% c("class switched memory B cell", "gernminal center B cell")) %>%
+  group_by(chr, start, end, SYMBOL, gene_id) %>%
+  summarize(closest_polycomb=min(distance)) %>%
+  filter(closest_polycomb<1000) %>%
+  write.table(file="../data/genes_with_enhancers_near_polycomb.tsv", sep="\t", row.names=FALSE, quote=FALSE)
+  
+  
+sig <- close_genes$close
+
+names(sig) <- close_genes$gene_id
+
+
+
+
+```
+
+```{r}
+library(goseq)
+library(msigdbr)
+library(org.Hs.eg.db)
+categories <- msigdbr::msigdbr() %>% mutate(entrez_gene = as.character(entrez_gene))
+entrez_to_ensembl <- AnnotationDbi::select(org.Hs.eg.db, keys=unique(as.character(categories$entrez_gene)), keytype = "ENTREZID", columns="ENSEMBL")
+list_categories <- categories %>%
+  inner_join(entrez_to_ensembl, by=c("entrez_gene" = "ENTREZID")) %>% 
+  dplyr::select(ENSEMBL, gs_name, gs_cat) %>% 
+  filter(!is.na(ENSEMBL))
+list_categories <- split(list_categories$gs_name, list_categories$ENSEMBL, drop = TRUE)
+category_info <- dplyr::select(categories, gs_name, gs_id, gs_cat, gs_subcat) %>%
+  dplyr::distinct()
+
+get_odds_ratio <- function (numInCat, numDEInCat, all_genes, numDEgenes) {
+  n11 = numDEInCat
+  n01 = numInCat - numDEInCat
+  n10 = numDEgenes - numDEInCat
+  n00 = all_genes - n11 - n01 - n10
+  
+  return ((n00*n11)/(n01*n10))
+  
+}
+
+```
+
+```{r}
+
+distance_pwf <- nullp(sig, "hg38", "ensGene")
+all_genes = intersect(rownames(distance_pwf), names(list_categories))
+nde_genes <- sum(distance_pwf$DEgenes[rownames(distance_pwf) %in% all_genes])
+de_pathways <- goseq(distance_pwf, genome = "hg38", "ensGene", gene2cat = list_categories) %>%
+  mutate(padj = p.adjust(over_represented_pvalue, method="BH"),
+         OR = get_odds_ratio(numInCat, numDEInCat, length(all_genes), nde_genes),
+         enrichment = (numDEInCat/nde_genes)/(numInCat/length(all_genes)))%>%
+  inner_join(category_info, by=c("category"= "gs_name"))
+
+de_pathways %>% arrange(padj) %>% filter(padj < 0.05) %>% arrange(desc(OR))
+```
+
+```{r}
+library(ggplot2)
+de_pathways %>%
+  mutate(category=sub("GO_|REACTOME_", "", category),
+         category=substr(category, 1, 40)) %>%
+  filter(padj<0.01) %>%
+  group_by(gs_cat) %>%
+  
+  arrange(desc(-log10(padj))) %>%
+  dplyr::slice(1:20) %>%
+  ungroup() %>%
+  ggplot() + 
+  aes(x=reorder(category, -log10(padj)), color=enrichment, y=-log10(padj)) +
+  geom_point() + 
+  facet_wrap(~gs_cat, scale="free") +
+  coord_flip() + 
+  theme_bw(base_size=8)
+```
+
+
+```{r, fig.height=10, fig.width=10}
+library(tidyr)
+library(ComplexHeatmap)
+
+
+hit_gene_by_category <- inner_join(categories, entrez_to_ensembl, by = c("entrez_gene" = "ENTREZID")) %>%
+  filter(gs_id %in% de_pathways$gs_id[de_pathways$padj < 0.05],
+         ENSEMBL %in% names(sig)[sig == 1]) %>%
+  inner_join(category_info) %>%
+  dplyr::select(gs_name, gene_symbol) %>%
+  mutate(value=1) %>%
+  spread(gene_symbol, value, fill=0)
+
+hit_gene_by_category <- as.data.frame(hit_gene_by_category)
+rownames(hit_gene_by_category  ) <- hit_gene_by_category$gs_name
+hit_gene_by_category <- as.matrix(hit_gene_by_category[,-1])
+Heatmap(hit_gene_by_category,
+        row_names_gp = gpar(fontsize=8),
+        column_names_gp = gpar(fontsize=8),
+        show_row_names = TRUE)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
