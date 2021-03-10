@@ -1,0 +1,251 @@
+################################################################
+#
+#
+# Pipeline pipeline_atacseq.py configuration file for sphinxreport
+#
+# This pipeline.ini file lists some configuration options that you might 
+# want a user to set automatically.
+#
+# Add pipeline specific options into separate sections
+#
+################################################################
+## general options
+
+
+# Project name
+projectname: CGATProject
+
+# Copyright statement
+copyright: CGAT (2010-2014)
+
+# The short X.Y version.
+version: 0.1
+
+# The full version, including alpha/beta/rc tags.
+release: 0.1
+
+# Temporal directory to use. Sometimes /scratch is full and is better to
+# use an alternative
+general_temporal_dir: /fastdata/mb1ims/tmp
+
+########################################################
+# the genome to use (UCSC convention)
+genome: hg38_noalt
+
+genome_dir: /shared/sudlab1/General/mirror/genomes/index
+
+################################################################
+#
+# Location of annotation database
+#
+################################################################
+geneset: /shared/sudlab1/General/annotations/hg38_noalt_ensembl85/ensembl.dir/geneset_all.gtf.gz
+
+annotations:
+    database: /ifs/data/annotations/hg19_ensembl62/csvdb
+
+    # directory with annotation information
+    dir: ''
+
+
+    ################################################################
+    #
+    # samples details
+    #
+    #
+    ################################################################
+samples:
+
+    # Tab separated table with:
+    #        Sample_name    condition(control/treatment)    five_prime_quality_trimming(number of base pairs trimmed from both reads' 5' end in a pair)
+    #        nd2345    control    2
+    #
+    # Has to specify all the samples in the base directory with the details!
+    details_table: samples.tsv
+
+
+    # If pool_condition = 1, additionally to peak calling per sample,
+    # the samples.tsv table will be read and all single ends for
+    # the control samples will be pooled together and all the single ends for
+    # the treatment samples will be pooled together.
+    # If pool_condition = 0, pool_condition_virtual_se will be disabled
+    pool_condition: 0
+
+
+    ################################################################
+    #
+    # filtering options
+    #
+    ################################################################
+filtering:
+
+    # Removes peaks which have any overlap with the specified bed areas
+    # These can be for example areas of low mappability or hotspots 
+    # (areas of excessively high mappability)
+    # Bed file list separated by ,
+    bed_exclusions: [/shared/sudlab1/General/projects/segmentation/chromHMM_excluded_regions/hg38_ENCODE_excluded_regions_liftup_from_hg19.bed,/shared/sudlab1/General/projects/segmentation/chromHMM_excluded_regions/hg38_ENCODE_excluded_high_mappability_regions.bed.gz]
+
+    # Path the script to deal with multimappers
+    # https://github.com/kundajelab/bds_pipeline_modules/blob/master/utils/assign_multimappers.py
+    multimappers_script: /home/mbp15ja/dev/third_party_scripts/assign_multimappers.py
+
+    # Number of multimapping proper pairs not allowed to proceed the filtering.
+    # Eg. If allowed_multimapper_proper_pairs=3 = 6 single mappings
+    # Any reads which have the same or more than these mappings will be filtered out.
+    # 2 means only allow single mapping pairs
+    allowed_multimapper_proper_pairs: 2
+
+
+    # contigs to remove before peak calling separated by |
+    # For ATAC-seq probably want to remove chrM
+    # Does partial matching: for each element *element* is removed
+    contigs_to_remove: _alt|_hap|chrM|_random|chrUn
+
+
+    ################################################################
+    #
+    # Prior mapping options
+    #
+    ################################################################
+mapping:
+
+    # The mapping genome used. (Include .fa)
+    genome: /shared/sudlab1/General/mirror/genomes/bwa/hg38_noalt.fa
+
+
+
+    ################################################################
+    #
+    # End extending
+    #
+    ################################################################
+end_extending:
+
+    # Shift to apply to the 5' end of the reads to displace them.
+    # Only negative numbers implemented 
+    # (negative number will shift it upstream)
+    # If nothing is specified, it defaults to -100
+    shift: -100
+
+    # Extension size to apply to the 5' ends of the reads after shifting
+    # This will make them longer. Only positive numbers implemented
+    # Positive number extends downstream
+    # If nothing is specified, it defaults to 200
+    extsize: 200
+
+
+
+    ################################################################
+    #
+    # MACS2
+    #
+    ################################################################
+macs2:
+
+    # The macs2 thresholding method used, at the moment either:
+    # q
+    # p
+    # (q-value or p-value)
+    # If nothing is specified, it defaults to "p"
+    threshold_method: q
+
+    # The thresholding quantity for the threshold_method specified
+    # If nothing is specified, it defaults to 0.01
+    threshold_quantity: 0.01
+
+
+
+    ################################################################
+    #
+    # Bootstrap Hierarchical clustering
+    #
+    ################################################################
+bootstrap_clustering:
+
+    # Comma separated list of metrics
+    # -"maximum": Maximum distance between two components of x and y (supremum norm)
+    # -"euclidean": Usual distance between the two vectors (2 norm aka L_2), sqrt(sum((x_i - y_i)^2))
+    # -"manhattan": Computes the city block (distance A->B=sum of differences in dimensions)
+    #             or Manhattan distance between the points.
+    # -"binary": (aka asymmetric binary): The vectors are regarded as binary bits, so non-zero
+    #             elements are 'on' and zero elements are 'off'. The distance is the proportion of
+    #             bits in which only one is on amongst those in which at least one is on.
+    # -"cor": Correlation
+    metrics: cor
+
+
+    # Comma separated list of linkage methods
+    # -"ward": Tends to look for spherical clusters, very cohesive inside and extremely differentiated
+    #        from other groups. Another nice characteristic is that the method tends
+    #        to find clusters of similar size. This ward (ward.D2) works with other distances.
+    # -"complete": Links clusters using their furthest observations, that is, their most
+    #        dissimilar data points. Consequently, clusters created using this method tend to be
+    #        comprised of highly similar observations, making the resulting groups quite compact.
+    # -"average": Links clusters using their centroids and ignoring their boundaries.
+    #        The method creates larger groups than the complete method. In addition,
+    #        the clusters can be different sizes and shapes, contrary to the Wards solutions.
+    #        Consequently, this average, multipurpose, approach sees successful use in the field of biological sciences.
+    # If the variable is empty, try all
+    linkage_methods: [ward.D2,complete,average]
+
+
+
+
+    ################################################################
+    #
+    # Naive feature clustering
+    #
+    ################################################################
+naive_feature_clustering:
+
+    # Specifies the width of the genomic windows. Each genomic window will be a feature in the clustering
+    window_width: 500
+
+
+
+    ################################################################
+    #
+    # General clustering options
+    #
+    ################################################################
+clustering:
+
+    # The features in the clustering are for example peaks, or genomic windows of window_width
+    # specified above. This specifies what fraction of each of these features has to 
+    # be overlapped (for example by extended reads in the case of peak features 
+    # or by peaks in the case of windows).
+    feature_overlap_fraction: 0.1
+
+
+    # List of files (bed or bed.gz) separated by commas.
+    # Apart from a clustering where all the features are used, an additional
+    # clustering will be produced with the following:
+    # For each file all the regions specified will be excluded from the clustering.
+    # As long as a region in the clustering has an overlap of 1bp with the regions
+    # provided.
+    # Here for example, TSS can be put to see if the clustering varies. 
+    excluded_features: /shared/sudlab1/General/projects/capturec_hist/enhancer_prediction_stats_raw_data/TSS/hg38_noalt_coding_non_coding_genes_tss_merged.bed.gz
+
+    ################################################################
+    #
+    # RNAseq options
+    # 
+    ################################################################
+salmon:
+   threads: 4
+   memory: 4G
+
+stringtie:
+   threads: 4
+   memory: 2G
+   merge_threads: 8
+    ################################################################
+    #
+    # sphinxreport build options
+    #
+    ################################################################
+report:
+
+    # prefix to use for publishing the report from this pipeline
+    prefix: default
+
