@@ -48,7 +48,7 @@ mkdir peak_calling
 
 while read -r treatment control ; do
 echo $treatment $control 
-treatment_name=$(basename "$treatment" .noall.sorted.bam)
+treatment_name=$(basename "$treatment" .nodup.sorted.bam)
 control_name=$(basename "$control" .nodup.sorted.bam)
 
 macs2 callpeak -t $treatment -c $control -g hs -n ./peak_calling/$treatment_name.0.01 -B -q 0.01 --nomodel --verbose 4 --SPMR --call-summits
@@ -60,8 +60,8 @@ done <$ChIPseq_table
 
 #5. Super-enhancer calling, example for H3K27ac analysis
 #a. First make Tag Directories for CHIP AND INPUT files you want to use#
-makeTagDirectory "MM1S_H3K27ac_ChIP/" "MM1S_H3K27ac.noall.sorted.bam"
-makeTagDirectory "MM1S_Input_ChIP/" "MM1S_Input.noall.sorted.bam"
+makeTagDirectory "MM1S_H3K27ac_ChIP/" "MM1S_H3K27ac.nodup.sorted.bam"
+makeTagDirectory "MM1S_Input_ChIP/" "MM1S_Input.nodup.sorted.bam"
 
 #b. Then perform super-enhancer analysis
 findPeaks "MM1S_H3K27ac_ChIP" -i MM1S_Input_ChIP -style super -o MM1S_H3K27ac_ChIP.SuperEnhancers.txt -typical MM1S_H3K27ac_ChIP.typical_enhancers.txt -L 0
